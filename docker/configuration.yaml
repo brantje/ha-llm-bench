@@ -1,0 +1,11 @@
+default_config:
+
+homeassistant:
+  name: HA Test Harness
+  time_zone: UTC
+  packages: !include_dir_named packages
+
+conversation:
+
+logger:
+  default: info

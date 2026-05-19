@@ -1,0 +1,38 @@
+input_boolean:
+  lamp_x_power:
+    name: Lamp X Power
+    initial: true
+  fan_switch:
+    name: Fan Switch
+    initial: false
+  movie_mode_active:
+    name: Movie Mode Active
+    initial: false
+  living_room_heater:
+    name: Living Room Heater
+    initial: false
+
+input_number:
+  lamp_x_brightness:
+    name: Lamp X Brightness
+    min: 0
+    max: 255
+    step: 1
+    initial: 255
+  living_room_temp:
+    name: Living Room Temperature
+    min: 10
+    max: 35
+    step: 0.5
+    initial: 21
+    unit_of_measurement: "°C"
+
+input_select:
+  living_room_hvac:
+    name: Living Room HVAC Mode
+    options:
+      - "off"
+      - "heat"
+      - "cool"
+      - "auto"
+    initial: "heat"

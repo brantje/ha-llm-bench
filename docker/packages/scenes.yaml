@@ -1,0 +1,7 @@
+scene:
+  - id: movie_mode
+    name: Movie Mode
+    entities:
+      input_boolean.lamp_x_power: "off"
+      input_number.lamp_x_brightness: "30"
+      input_boolean.movie_mode_active: "on"

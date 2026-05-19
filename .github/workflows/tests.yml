@@ -1,0 +1,53 @@
+name: Conversational Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      OPENROUTER_FREE_ONLY: "true"
+      OPENROUTER_MAX_MODELS: "2"
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Start Home Assistant
+        run: docker compose up -d --wait
+
+      - name: Bootstrap Home Assistant
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
+          PYTHONPATH: src
+        run: .venv/bin/python bootstrap.py
+
+      - name: Run conversational tests
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
+          PYTHONPATH: src
+        run: |
+          set -a
+          source .env
+          set +a
+          .venv/bin/pytest tests/ -v --tb=short
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: reports/

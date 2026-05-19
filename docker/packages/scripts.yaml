@@ -1,0 +1,15 @@
+script:
+  goodnight:
+    alias: Goodnight
+    sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.lamp_x_power
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.fan_switch
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.living_room_hvac
+        data:
+          option: "off"

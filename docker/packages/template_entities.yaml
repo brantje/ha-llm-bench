@@ -1,0 +1,47 @@
+template:
+  - light:
+      - name: Lamp X
+        unique_id: lamp_x
+        state: "{{ is_state('input_boolean.lamp_x_power', 'on') }}"
+        level: "{{ states('input_number.lamp_x_brightness') | int }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.lamp_x_power
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.lamp_x_brightness
+            data:
+              value: 255
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.lamp_x_power
+        set_level:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.lamp_x_power
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.lamp_x_brightness
+            data:
+              value: "{{ brightness }}"
+
+  - switch:
+      - name: Fan Switch
+        unique_id: fan_switch
+        state: "{{ is_state('input_boolean.fan_switch', 'on') }}"
+        turn_on:
+          action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.fan_switch
+        turn_off:
+          action: input_boolean.turn_off
+          target:
+            entity_id: input_boolean.fan_switch
+
+  - sensor:
+      - name: Living Room Temperature
+        unique_id: living_room_temperature
+        state: "{{ states('input_number.living_room_temp') | float }}"
+        unit_of_measurement: "°C"

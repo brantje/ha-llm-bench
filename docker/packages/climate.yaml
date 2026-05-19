@@ -1,0 +1,34 @@
+climate:
+  - platform: generic_thermostat
+    name: Living Room
+    unique_id: living_room_climate
+    heater: input_boolean.living_room_heater
+    target_sensor: sensor.living_room_temperature
+    min_temp: 10
+    max_temp: 35
+    target_temp: 21
+    ac_mode: false
+
+automation:
+  - id: sync_living_room_target_temp
+    alias: Sync Living Room Target Temperature
+    trigger:
+      - trigger: state
+        entity_id: climate.living_room
+        attribute: temperature
+    action:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.living_room_temp
+        data:
+          value: "{{ state_attr('climate.living_room', 'temperature') }}"
+
+  - id: sync_living_room_current_temp
+    alias: Sync Living Room Current Temperature
+    trigger:
+      - trigger: state
+        entity_id: input_number.living_room_temp
+    action:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.living_room_temperature

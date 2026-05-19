@@ -1,0 +1,14 @@
+.env
+.venv/
+reports/
+__pycache__/
+*.pyc
+.pytest_cache/
+docker/.storage/
+docker/home-assistant_v2.db*
+docker/*.log
+docker/*.fault
+docker/*.log.*
+docker/*.lock
+docker/*.db*
+docker/.HA_VERSION
