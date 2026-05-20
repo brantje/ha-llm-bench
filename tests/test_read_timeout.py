@@ -39,8 +39,17 @@ def test_failed_with_read_timeout_from_excinfo():
     assert failed_with_read_timeout(FakeReport())
 
 
-def test_remove_test_records_clears_matching_entries():
+@pytest.fixture
+def isolated_run_metrics(monkeypatch):
+    """Keep unit tests from mutating session-wide benchmark metrics."""
+    saved = list(RUN_METRICS.records)
     RUN_METRICS.records.clear()
+    monkeypatch.setattr("ha_test.reporting.write_results_json", lambda *args, **kwargs: None)
+    yield
+    RUN_METRICS.records[:] = saved
+
+
+def test_remove_test_records_clears_matching_entries(isolated_run_metrics):
     record_test_result(
         nodeid="tests/test_lights.py::test_lights[a-turn_on]",
         model="model-a",
