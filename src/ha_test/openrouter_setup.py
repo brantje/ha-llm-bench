@@ -10,6 +10,7 @@ from typing import Any, Callable
 import httpx
 
 CONFIG_ENTRY_LOAD_TIMEOUT = 120
+CONVERSATION_AGENT_TIMEOUT = 60
 SUBENTRY_FLOW_RETRIES = 5
 SUBENTRY_FLOW_RETRY_DELAY = 2.0
 
@@ -102,13 +103,44 @@ def list_entity_registry(base_url: str, token: str) -> list[dict[str, Any]]:
     return result.get("result", [])
 
 
+def reload_config_entry(base_url: str, token: str, entry_id: str) -> None:
+    """Reload a config entry so new subentries register conversation entities."""
+    response = api_request(
+        base_url,
+        token,
+        "POST",
+        f"/api/config/config_entries/entry/{entry_id}/reload",
+    )
+    response.raise_for_status()
+
+
 def resolve_agent_for_subentry(base_url: str, token: str, subentry_id: str) -> str | None:
     for entry in list_entity_registry(base_url, token):
-        if entry.get("config_subentry_id") == subentry_id and entry["entity_id"].startswith(
-            "conversation."
-        ):
+        if not entry["entity_id"].startswith("conversation."):
+            continue
+        if entry.get("config_subentry_id") == subentry_id:
+            return entry["entity_id"]
+        if entry.get("unique_id") == subentry_id:
             return entry["entity_id"]
     return None
+
+
+def wait_for_conversation_agent(
+    base_url: str,
+    token: str,
+    subentry_id: str,
+    timeout: float = CONVERSATION_AGENT_TIMEOUT,
+) -> str:
+    """Poll until the conversation agent entity for a subentry appears."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        agent_id = resolve_agent_for_subentry(base_url, token, subentry_id)
+        if agent_id:
+            return agent_id
+        time.sleep(1)
+    raise TimeoutError(
+        f"No conversation agent entity for subentry {subentry_id} within {timeout:.0f}s"
+    )
 
 
 def delete_subentry(base_url: str, token: str, entry_id: str, subentry_id: str) -> None:
@@ -304,11 +336,10 @@ def ensure_conversation_for_model(
 
     if not created:
         reconfigure_conversation_subentry(base_url, token, entry_id, subentry_id, model)
-    agent_id = resolve_agent_for_subentry(base_url, token, subentry_id)
-    if agent_id is None:
-        raise RuntimeError(
-            f"No conversation agent entity found for OpenRouter model {model!r}"
-        )
+    else:
+        reload_config_entry(base_url, token, entry_id)
+        wait_for_config_entry_loaded(base_url, token, entry_id)
+    agent_id = wait_for_conversation_agent(base_url, token, subentry_id)
     return subentry_id, agent_id
 
 
