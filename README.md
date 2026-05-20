@@ -15,7 +15,40 @@ docker compose up -d --wait
 .venv/bin/pytest
 ```
 
-Reports are written to `reports/results.json` (updated after each test), `reports/report.json`, and `reports/report.md`.
+Reports are written to `reports/results.json` (updated after each test), `reports/report.json`, and `reports/report.md`. Each finalized run is also archived under `reports/history/<run_id>/` with a manifest at `reports/history/index.json`.
+
+### Results viewer (HTML)
+
+Interactive benchmark dashboard in `docs/`:
+
+```bash
+# From repo root (required so fetch can load reports/)
+python3 -m http.server 8080
+# Open http://localhost:8080/docs/
+```
+
+The viewer loads:
+
+- **Current report** — `reports/report.json` (final run)
+- **Live results** — `reports/results.json` (updated after each test; optional 30s auto-refresh)
+- **History** — past runs from `reports/history/index.json`
+
+Features: model leaderboard, Chart.js charts, full test table with filters (outcome, model, test file, entity, flags, search, latency/cost), grouping, pricing tables, copy report JSON, and two-run model comparison. Filter state is stored in the URL hash for sharing.
+
+### Run history (app)
+
+Each completed pytest run is archived under `reports/history/<run_id>/report.json` with a manifest at `reports/history/index.json` (last 20 runs). The test plan uses medians from all archived runs (plus the current report) for cost and wall-time estimates.
+
+```bash
+# List archived runs
+PYTHONPATH=src .venv/bin/python -m ha_test.history list
+
+# Print one archived report
+PYTHONPATH=src .venv/bin/python -m ha_test.history show '2026-05-20T07:38:23.015278+00:00'
+
+# Or via bootstrap
+PYTHONPATH=src .venv/bin/python bootstrap.py --history
+```
 
 ## Entity Catalog (MVP)
 

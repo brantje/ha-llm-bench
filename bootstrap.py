@@ -307,6 +307,20 @@ def snapshot_baseline_states(base_url: str, token: str) -> None:
     BASELINE_PATH.write_text(json.dumps(tracked, indent=2))
 
 
+def print_recent_history(*, limit: int = 5) -> None:
+    from ha_test.reporting import load_history_index, format_history_summary
+
+    index = load_history_index()
+    if not index:
+        return
+    print(f"Recent benchmark runs ({len(index)} archived):")
+    for entry in index[:limit]:
+        print(f"  - {format_history_summary(entry)}")
+    print("  Results viewer: python3 -m http.server 8080  ->  http://localhost:8080/docs/")
+    print("  List history:   PYTHONPATH=src .venv/bin/python -m ha_test.history list")
+    print("")
+
+
 def resolve_default_model(env: dict[str, str]) -> str:
     from ha_test.openrouter import get_target_model_ids
 
@@ -366,6 +380,7 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
         print("Test plan preview:")
         print_test_plan(api_key)
         print("")
+        print_recent_history()
         model = resolve_default_model(env)
         entry = configure_openrouter(base_url, token, api_key, model)
         subentry_id = entry["_conversation_subentry_id"]
@@ -392,8 +407,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap Home Assistant test harness")
     parser.add_argument("--reset", action="store_true", help="Remove .storage before bootstrapping")
     parser.add_argument("--url", default=HA_URL, help="Home Assistant base URL")
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="List archived benchmark runs and exit",
+    )
     args = parser.parse_args()
     load_dotenv(ENV_PATH, override=True)
+    if args.history:
+        from ha_test.history import print_history_list
+
+        raise SystemExit(print_history_list())
     bootstrap(args.url, reset=args.reset)
 
 

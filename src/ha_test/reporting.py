@@ -18,6 +18,9 @@ from ha_test.openrouter import (
 )
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
+HISTORY_DIR = REPORTS_DIR / "history"
+HISTORY_INDEX = HISTORY_DIR / "index.json"
+HISTORY_MAX_ENTRIES = 20
 
 
 @dataclass
@@ -411,6 +414,132 @@ def write_results_json(run_metrics: RunMetrics | None = None) -> None:
     (REPORTS_DIR / "results.json").write_text(json.dumps(report, indent=2))
 
 
+def _sanitize_run_id(run_id: str) -> str:
+    return run_id.replace(":", "-").replace(".", "-").replace("+", "_")
+
+
+def load_history_index() -> list[dict[str, Any]]:
+    """Return archived run manifest entries (newest first)."""
+    if not HISTORY_INDEX.exists():
+        return []
+    try:
+        index = json.loads(HISTORY_INDEX.read_text())
+    except json.JSONDecodeError:
+        return []
+    return index if isinstance(index, list) else []
+
+
+def history_report_path(entry: dict[str, Any]) -> Path:
+    """Resolve on-disk path for a history index entry."""
+    rel = entry.get("path")
+    if isinstance(rel, str) and rel:
+        return REPORTS_DIR / rel
+    run_id = entry.get("run_id")
+    if not run_id:
+        return HISTORY_DIR / "unknown" / "report.json"
+    return HISTORY_DIR / _sanitize_run_id(run_id) / "report.json"
+
+
+def load_report_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def load_historical_reports(*, max_runs: int | None = None) -> list[dict[str, Any]]:
+    """Load archived reports (newest first), then current report/results if not duplicates."""
+    limit = max_runs if max_runs is not None else HISTORY_MAX_ENTRIES
+    reports: list[dict[str, Any]] = []
+    seen_run_ids: set[str] = set()
+
+    for entry in load_history_index():
+        run_id = entry.get("run_id")
+        if not run_id or run_id in seen_run_ids:
+            continue
+        report = load_report_json(history_report_path(entry))
+        if not report:
+            continue
+        reports.append(report)
+        seen_run_ids.add(run_id)
+        if len(reports) >= limit:
+            return reports
+
+    for path in (REPORTS_DIR / "results.json", REPORTS_DIR / "report.json"):
+        report = load_report_json(path)
+        if not report:
+            continue
+        run_id = report.get("run_id")
+        if run_id and run_id in seen_run_ids:
+            continue
+        reports.append(report)
+        if run_id:
+            seen_run_ids.add(run_id)
+
+    return reports
+
+
+def load_history_report(run_id: str) -> dict[str, Any] | None:
+    """Load a single archived report by run_id."""
+    for entry in load_history_index():
+        if entry.get("run_id") == run_id:
+            return load_report_json(history_report_path(entry))
+    folder = HISTORY_DIR / _sanitize_run_id(run_id) / "report.json"
+    return load_report_json(folder)
+
+
+def format_history_summary(entry: dict[str, Any]) -> str:
+    """One-line summary for CLI / bootstrap output."""
+    summary = entry.get("summary") or {}
+    rate = summary.get("overall_pass_rate")
+    rate_label = f"{rate:.1%}" if rate is not None else "n/a"
+    started = (entry.get("started_at") or entry.get("run_id") or "")[:19]
+    cost = summary.get("total_cost_usd")
+    cost_label = f"${cost:.4f}" if cost is not None else "n/a"
+    return f"{started}  pass {rate_label}  cost {cost_label}  ({entry.get('run_id', '')})"
+
+
+def archive_report_to_history(report: dict[str, Any]) -> None:
+    """Copy finalized report into reports/history and update index.json."""
+    run_id = report.get("run_id")
+    if not run_id:
+        return
+
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    folder_name = _sanitize_run_id(run_id)
+    run_dir = HISTORY_DIR / folder_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report_path = run_dir / "report.json"
+    report_path.write_text(json.dumps(report, indent=2))
+
+    relative_path = f"history/{folder_name}/report.json"
+    entry = {
+        "run_id": run_id,
+        "started_at": report.get("started_at"),
+        "finished_at": report.get("finished_at"),
+        "ha_version": report.get("ha_version"),
+        "summary": report.get("summary", {}),
+        "path": relative_path,
+    }
+
+    index: list[dict[str, Any]] = []
+    if HISTORY_INDEX.exists():
+        try:
+            index = json.loads(HISTORY_INDEX.read_text())
+        except json.JSONDecodeError:
+            index = []
+    if not isinstance(index, list):
+        index = []
+
+    index = [item for item in index if item.get("run_id") != run_id]
+    index.insert(0, entry)
+    index = index[:HISTORY_MAX_ENTRIES]
+    HISTORY_INDEX.write_text(json.dumps(index, indent=2))
+
+
 def finalize_report(run_metrics: RunMetrics) -> dict[str, Any]:
     run_metrics.finished_at = datetime.now(UTC).isoformat()
     activity_totals, activity_warning = fetch_activity_totals(run_metrics)
@@ -424,5 +553,6 @@ def finalize_report(run_metrics: RunMetrics) -> dict[str, Any]:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     (REPORTS_DIR / "report.json").write_text(json.dumps(report, indent=2))
     (REPORTS_DIR / "report.md").write_text(render_markdown(report))
+    archive_report_to_history(report)
     write_results_json(run_metrics)
     return report

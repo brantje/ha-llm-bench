@@ -18,7 +18,7 @@ from ha_test.openrouter import (
     get_target_model_ids,
     usage_settle_seconds,
 )
-from ha_test.reporting import format_duration
+from ha_test.reporting import format_duration, load_historical_reports, load_history_index
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 REPORTS_DIR = PROJECT_ROOT / "reports"
@@ -92,25 +92,34 @@ def _tokens_per_test_from_report(report: dict[str, Any]) -> list[float]:
     return per_test
 
 
+def _historical_source_label(report_count: int, history_count: int) -> str:
+    if history_count:
+        if report_count > history_count:
+            return f"reports/history ({history_count} runs) + current report"
+        return f"reports/history ({history_count} runs)"
+    if report_count == 1:
+        if (REPORTS_DIR / "results.json").exists():
+            return "reports/results.json"
+        return "reports/report.json"
+    return "reports"
+
+
 def load_historical_tokens_per_test() -> dict[str, float] | None:
-    for path in (REPORTS_DIR / "results.json", REPORTS_DIR / "report.json"):
-        if not path.exists():
-            continue
-        try:
-            report = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            continue
-        per_test = _tokens_per_test_from_report(report)
-        if not per_test:
-            continue
-        total_tokens = statistics.median(per_test)
-        return {
-            "prompt_tokens": total_tokens * 0.9,
-            "completion_tokens": total_tokens * 0.1,
-            "total_tokens": total_tokens,
-            "source": str(path.relative_to(PROJECT_ROOT)),
-        }
-    return None
+    reports = load_historical_reports()
+    per_test_values: list[float] = []
+    for report in reports:
+        per_test_values.extend(_tokens_per_test_from_report(report))
+    if not per_test_values:
+        return None
+
+    total_tokens = statistics.median(per_test_values)
+    history_count = len(load_history_index())
+    return {
+        "prompt_tokens": total_tokens * 0.9,
+        "completion_tokens": total_tokens * 0.1,
+        "total_tokens": total_tokens,
+        "source": _historical_source_label(len(reports), history_count),
+    }
 
 
 def default_tokens_per_test() -> dict[str, float]:
@@ -213,20 +222,14 @@ def build_test_plan(api_key: str | None = None) -> dict[str, Any]:
 
 
 def _historical_avg_latency_seconds() -> float | None:
-    for path in (REPORTS_DIR / "results.json", REPORTS_DIR / "report.json"):
-        if not path.exists():
-            continue
-        try:
-            report = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            continue
-        latencies: list[float] = []
+    latencies: list[float] = []
+    for report in load_historical_reports():
         for stats in report.get("models", {}).values():
             avg_ms = (stats.get("latency_ms") or {}).get("avg")
             if avg_ms:
                 latencies.append(float(avg_ms) / 1000.0)
-        if latencies:
-            return statistics.mean(latencies)
+    if latencies:
+        return statistics.mean(latencies)
     return None
 
 

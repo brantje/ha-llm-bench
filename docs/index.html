@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HA Benchmark Results</title>
+  <link rel="stylesheet" href="css/viewer.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-brand">
+      <h1>HA Conversational Benchmark</h1>
+      <p class="subtitle" id="run-meta">Loading…</p>
+    </div>
+    <div class="header-controls">
+      <label class="control-label">
+        Run
+        <select id="run-select" aria-label="Select benchmark run"></select>
+      </label>
+      <label class="control-label checkbox-label">
+        <input type="checkbox" id="live-refresh" />
+        Auto-refresh (30s)
+      </label>
+      <button type="button" id="copy-json" class="btn btn-secondary">Copy report JSON</button>
+    </div>
+  </header>
+
+  <div id="activity-warning" class="banner banner-warning hidden" role="alert"></div>
+  <div id="load-error" class="banner banner-error hidden" role="alert"></div>
+
+  <section class="kpi-strip" id="kpi-strip" aria-label="Run summary"></section>
+
+  <section class="panel" id="compare-panel">
+    <div class="panel-header">
+      <h2>Compare runs</h2>
+      <button type="button" id="compare-toggle" class="btn btn-secondary btn-sm">Enable compare</button>
+    </div>
+    <div id="compare-controls" class="compare-controls hidden">
+      <label class="control-label">
+        Run A
+        <select id="compare-run-a"></select>
+      </label>
+      <label class="control-label">
+        Run B
+        <select id="compare-run-b"></select>
+      </label>
+    </div>
+    <div id="compare-table-wrap" class="table-wrap hidden"></div>
+  </section>
+
+  <section class="panel" id="leaderboard-panel">
+    <div class="panel-header">
+      <h2>Model leaderboard</h2>
+      <p class="panel-hint">Click a row to filter tests by model</p>
+    </div>
+    <div class="table-wrap" id="leaderboard-wrap"></div>
+  </section>
+
+  <section class="panel charts-panel">
+    <h2>Model charts</h2>
+    <div class="charts-grid">
+      <div class="chart-card"><h3>Pass rate</h3><canvas id="chart-pass-rate"></canvas></div>
+      <div class="chart-card"><h3>Avg latency</h3><canvas id="chart-latency"></canvas></div>
+      <div class="chart-card"><h3>Cost (USD)</h3><canvas id="chart-cost"></canvas></div>
+    </div>
+  </section>
+
+  <section class="panel" id="pricing-panel">
+    <div class="panel-header">
+      <h2>Model pricing</h2>
+      <button type="button" id="pricing-toggle" class="btn btn-secondary btn-sm" aria-expanded="false">Show pricing</button>
+    </div>
+    <div id="pricing-wrap" class="hidden"></div>
+  </section>
+
+  <section class="panel" id="filters-panel">
+    <h2>Test filters</h2>
+    <div class="filters-grid" id="filters-grid">
+      <label class="control-label">
+        Outcome
+        <select id="filter-outcome">
+          <option value="all">All</option>
+          <option value="passed">Passed</option>
+          <option value="failed">Failed</option>
+        </select>
+      </label>
+      <label class="control-label">
+        Model
+        <select id="filter-model" multiple size="3"></select>
+      </label>
+      <label class="control-label">
+        Test file
+        <select id="filter-test-file">
+          <option value="all">All</option>
+        </select>
+      </label>
+      <label class="control-label">
+        Entity
+        <select id="filter-entity">
+          <option value="all">All</option>
+        </select>
+      </label>
+      <label class="control-label">
+        Search
+        <input type="search" id="filter-search" placeholder="command, speech, failure…" />
+      </label>
+      <label class="control-label">
+        Latency min (ms)
+        <input type="number" id="filter-latency-min" min="0" step="1" />
+      </label>
+      <label class="control-label">
+        Latency max (ms)
+        <input type="number" id="filter-latency-max" min="0" step="1" />
+      </label>
+      <label class="control-label">
+        Cost min (USD)
+        <input type="number" id="filter-cost-min" min="0" step="0.0001" />
+      </label>
+      <label class="control-label">
+        Cost max (USD)
+        <input type="number" id="filter-cost-max" min="0" step="0.0001" />
+      </label>
+      <div class="flags-group">
+        <span class="flags-label">Flags</span>
+        <label class="checkbox-label"><input type="checkbox" id="filter-hallucination" /> Hallucination</label>
+        <label class="checkbox-label"><input type="checkbox" id="filter-clarification" /> Clarification</label>
+        <label class="checkbox-label"><input type="checkbox" id="filter-wrong-entity" /> Wrong entity</label>
+        <label class="checkbox-label"><input type="checkbox" id="filter-flag-any" /> Any flag set</label>
+      </div>
+      <div class="filter-actions">
+        <button type="button" id="filter-clear" class="btn btn-secondary btn-sm">Clear filters</button>
+        <span id="filter-count" class="filter-count"></span>
+      </div>
+    </div>
+    <div class="grouping-row">
+      <span>Group by</span>
+      <label class="radio-label"><input type="radio" name="group-by" value="none" checked /> None</label>
+      <label class="radio-label"><input type="radio" name="group-by" value="test_file" /> Test file</label>
+      <label class="radio-label"><input type="radio" name="group-by" value="entity" /> Entity</label>
+    </div>
+  </section>
+
+  <section class="panel" id="tests-panel">
+    <div class="panel-header">
+      <h2>Tests</h2>
+      <button type="button" id="clear-model-filter" class="btn btn-secondary btn-sm hidden">Clear model filter</button>
+    </div>
+    <div class="table-wrap tests-table-wrap" id="tests-wrap"></div>
+  </section>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

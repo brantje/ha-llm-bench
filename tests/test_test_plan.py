@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import ha_test.reporting as reporting
 from ha_test.openrouter import get_target_model_ids, parse_csv_ids
 from ha_test.test_plan import (
     _tokens_per_test_from_report,
@@ -70,6 +71,9 @@ def test_load_historical_tokens_per_test(tmp_path, monkeypatch):
         }
     }
     (reports_dir / "results.json").write_text(json.dumps(report))
+    monkeypatch.setattr(reporting, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(reporting, "HISTORY_DIR", reports_dir / "history")
+    monkeypatch.setattr(reporting, "HISTORY_INDEX", reports_dir / "history" / "index.json")
     monkeypatch.setattr("ha_test.test_plan.REPORTS_DIR", reports_dir)
     monkeypatch.setattr("ha_test.test_plan.PROJECT_ROOT", tmp_path)
 
