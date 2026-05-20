@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any, Callable
 
 import httpx
+
+CONFIG_ENTRY_LOAD_TIMEOUT = 120
+SUBENTRY_FLOW_RETRIES = 5
+SUBENTRY_FLOW_RETRY_DELAY = 2.0
 
 STRICT_PROMPT = (
     "You are a Home Assistant controller. "
@@ -59,6 +64,24 @@ def find_openrouter_entry(entries: list[dict[str, Any]]) -> dict[str, Any] | Non
         if entry.get("domain") == "open_router":
             return entry
     return None
+
+
+def wait_for_config_entry_loaded(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    timeout: float = CONFIG_ENTRY_LOAD_TIMEOUT,
+) -> dict[str, Any]:
+    """Wait until a config entry reaches the loaded state (required for subentry flows)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for entry in get_config_entries(base_url, token):
+            if entry["entry_id"] == entry_id and entry.get("state") == "loaded":
+                return entry
+        time.sleep(1)
+    raise TimeoutError(
+        f"Config entry {entry_id} did not reach 'loaded' within {timeout:.0f}s"
+    )
 
 
 def list_subentries(base_url: str, token: str, entry_id: str) -> list[dict[str, Any]]:
@@ -150,6 +173,79 @@ def conversation_payload(model: str) -> dict[str, Any]:
     }
 
 
+def _subentry_flow_succeeded(result: dict[str, Any]) -> bool:
+    if result.get("type") == "create_entry":
+        return True
+    return (
+        result.get("type") == "abort"
+        and result.get("reason") == "reconfigure_successful"
+    )
+
+
+def run_conversation_subentry_flow(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    model: str,
+    *,
+    subentry_id: str | None = None,
+) -> dict[str, Any]:
+    """Start and complete an OpenRouter conversation subentry user/reconfigure flow."""
+    wait_for_config_entry_loaded(base_url, token, entry_id)
+    last_error: Exception | None = None
+
+    for attempt in range(SUBENTRY_FLOW_RETRIES):
+        try:
+            started = start_subentry_flow(
+                base_url,
+                token,
+                entry_id,
+                "conversation",
+                subentry_id=subentry_id,
+            )
+            flow_type = started.get("type")
+
+            if flow_type == "abort":
+                reason = started.get("reason", "unknown")
+                if reason == "entry_not_loaded":
+                    wait_for_config_entry_loaded(base_url, token, entry_id)
+                    last_error = RuntimeError(f"Subentry flow aborted: {reason}")
+                    time.sleep(SUBENTRY_FLOW_RETRY_DELAY)
+                    continue
+                if reason == "reconfigure_successful":
+                    return started
+                raise RuntimeError(f"Subentry flow aborted: {reason}")
+
+            if flow_type == "create_entry":
+                return started
+
+            if flow_type != "form":
+                raise RuntimeError(f"Unexpected subentry flow start: {started}")
+
+            flow_id = started.get("flow_id")
+            if not flow_id:
+                raise RuntimeError(f"Subentry flow missing flow_id: {started}")
+
+            result = submit_subentry_flow(
+                base_url, token, flow_id, conversation_payload(model)
+            )
+            if _subentry_flow_succeeded(result):
+                return result
+            raise RuntimeError(f"Unexpected subentry flow result: {result}")
+
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            if exc.response.status_code == 404:
+                wait_for_config_entry_loaded(base_url, token, entry_id)
+                time.sleep(SUBENTRY_FLOW_RETRY_DELAY)
+                continue
+            raise
+
+    raise RuntimeError(
+        f"Conversation subentry flow failed after {SUBENTRY_FLOW_RETRIES} attempts"
+    ) from last_error
+
+
 def _normalize_for_match(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
@@ -197,13 +293,17 @@ def ensure_conversation_for_model(
     entry_id: str,
     model: str,
 ) -> tuple[str, str]:
+    wait_for_config_entry_loaded(base_url, token, entry_id)
     matched = find_conversation_subentry_for_model(base_url, token, entry_id, model)
+    created = False
     if matched:
         subentry_id = matched["subentry_id"]
     else:
         subentry_id = create_conversation_subentry(base_url, token, entry_id, model)
+        created = True
 
-    reconfigure_conversation_subentry(base_url, token, entry_id, subentry_id, model)
+    if not created:
+        reconfigure_conversation_subentry(base_url, token, entry_id, subentry_id, model)
     agent_id = resolve_agent_for_subentry(base_url, token, subentry_id)
     if agent_id is None:
         raise RuntimeError(
@@ -223,8 +323,9 @@ def create_conversation_subentry(
         for subentry in list_subentries(base_url, token, entry_id)
         if subentry.get("subentry_type") == "conversation"
     }
-    flow = start_subentry_flow(base_url, token, entry_id, "conversation")
-    result = submit_subentry_flow(base_url, token, flow["flow_id"], conversation_payload(model))
+    result = run_conversation_subentry_flow(
+        base_url, token, entry_id, model, subentry_id=None
+    )
     created = result.get("result") or {}
     subentry_id = created.get("subentry_id")
     if subentry_id:
@@ -255,20 +356,10 @@ def reconfigure_conversation_subentry(
     subentry_id: str,
     model: str,
 ) -> None:
-    flow = start_subentry_flow(
-        base_url,
-        token,
-        entry_id,
-        "conversation",
-        subentry_id=subentry_id,
+    result = run_conversation_subentry_flow(
+        base_url, token, entry_id, model, subentry_id=subentry_id
     )
-    result = submit_subentry_flow(
-        base_url,
-        token,
-        flow["flow_id"],
-        conversation_payload(model),
-    )
-    if result.get("type") not in {"abort", "create_entry"}:
+    if not _subentry_flow_succeeded(result):
         raise RuntimeError(f"Unexpected conversation reconfigure result: {result}")
 
 

@@ -33,6 +33,7 @@ from ha_test.openrouter_setup import (
     configure_openrouter_conversation,
     find_openrouter_entry,
     get_config_entries,
+    wait_for_config_entry_loaded,
 )
 
 
@@ -304,7 +305,7 @@ def configure_openrouter(base_url: str, token: str, api_key: str, model: str) ->
     else:
         entry_id = entry["entry_id"]
 
-    time.sleep(2)
+    wait_for_config_entry_loaded(base_url, token, entry_id)
     subentry_id, agent_id = configure_openrouter_conversation(
         base_url,
         token,
