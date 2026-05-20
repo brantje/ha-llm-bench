@@ -14,7 +14,9 @@ from ha_test.homeassistant import HomeAssistantClient
 from ha_test.openrouter import env_value, get_target_model_ids, usage_settle_seconds
 from ha_test.reporting import RUN_METRICS, record_test_result
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if not os.environ.get("GITHUB_ACTIONS") and _env_file.exists():
+    load_dotenv(_env_file, override=False)
 
 _configured_model: str | None = None
 

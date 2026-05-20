@@ -86,12 +86,47 @@ Configure via environment variables:
 
 ## CI
 
-GitHub Actions workflow: `.github/workflows/tests.yml`
+[![Conversational Tests](https://github.com/OWNER/REPO/actions/workflows/tests.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/tests.yml)
 
-Required secrets:
+GitHub Actions workflow: [`.github/workflows/tests.yml`](.github/workflows/tests.yml)
 
-- `OPENROUTER_API_KEY`
-- `OPENROUTER_MANAGEMENT_KEY` (optional but recommended for cost/token stats)
+Runs on push/PR to `main`/`master` and via **Actions → Conversational Tests → Run workflow**.
+
+### Configuration
+
+CI does **not** use `.env`. All settings come from GitHub Actions environment variables.
+
+**Secrets** (Settings → Secrets and variables → Actions → Secrets):
+
+- `OPENROUTER_API_KEY` (required)
+- `OPENROUTER_MANAGEMENT_KEY` (optional; recommended for cost/token stats)
+
+**Variables** (Settings → Secrets and variables → Actions → Variables; all optional — workflow defaults apply if unset):
+
+| Variable | Default in workflow |
+|----------|---------------------|
+| `OPENROUTER_FREE_ONLY` | `true` |
+| `OPENROUTER_MAX_MODELS` | `2` |
+| `OPENROUTER_MIN_CONTEXT` | `8192` |
+| `OPENROUTER_MODEL` | (empty — auto-discover) |
+| `OPENROUTER_ALLOWLIST` / `OPENROUTER_DENYLIST` | (empty) |
+| `OPENROUTER_RATE_LIMIT_*` / `OPENROUTER_USAGE_SETTLE_SECONDS` | see `.env.example` |
+| `HA_URL` | `http://localhost:8123` |
+| `TZ` | `UTC` |
+
+Bootstrap writes `HA_TOKEN` and `HA_CONVERSATION_AGENT_ID` to `$GITHUB_ENV` for the pytest step (not to `.env`).
+
+### GitHub Pages (benchmark dashboard)
+
+After each push to `main` or `master`, the workflow publishes the latest reports to GitHub Pages (even when tests fail).
+
+1. **One-time setup**: **Settings → Pages → Build and deployment → Source** → **GitHub Actions**
+2. **URL**: `https://<owner>.github.io/<repo>/` (project site)
+3. **Contents**: `docs/` viewer plus `reports/` from the CI run (`report.json`, `results.json`, `history/`)
+
+Pull requests run tests and upload a `benchmark-reports` artifact but do not deploy Pages.
+
+Replace `OWNER/REPO` in the badge URL above with your GitHub org/user and repository name.
 
 ## Extending
 

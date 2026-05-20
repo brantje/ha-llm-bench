@@ -4,16 +4,45 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      OPENROUTER_FREE_ONLY: "true"
-      OPENROUTER_MAX_MODELS: "2"
-      TZ: UTC
+      PYTHONPATH: src
+      TZ: ${{ vars.TZ != '' && vars.TZ || 'UTC' }}
+      HA_URL: ${{ vars.HA_URL != '' && vars.HA_URL || 'http://localhost:8123' }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
+      OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+      OPENROUTER_FREE_ONLY: ${{ vars.OPENROUTER_FREE_ONLY != '' && vars.OPENROUTER_FREE_ONLY || 'true' }}
+      OPENROUTER_MIN_CONTEXT: ${{ vars.OPENROUTER_MIN_CONTEXT != '' && vars.OPENROUTER_MIN_CONTEXT || '8192' }}
+      OPENROUTER_ALLOWLIST: ${{ vars.OPENROUTER_ALLOWLIST }}
+      OPENROUTER_DENYLIST: ${{ vars.OPENROUTER_DENYLIST }}
+      OPENROUTER_MAX_MODELS: ${{ vars.OPENROUTER_MAX_MODELS != '' && vars.OPENROUTER_MAX_MODELS || '2' }}
+      OPENROUTER_RATE_LIMIT_MAX_RETRIES: ${{ vars.OPENROUTER_RATE_LIMIT_MAX_RETRIES != '' && vars.OPENROUTER_RATE_LIMIT_MAX_RETRIES || '8' }}
+      OPENROUTER_RATE_LIMIT_BUFFER_SECONDS: ${{ vars.OPENROUTER_RATE_LIMIT_BUFFER_SECONDS != '' && vars.OPENROUTER_RATE_LIMIT_BUFFER_SECONDS || '1' }}
+      OPENROUTER_RATE_LIMIT_FALLBACK_SECONDS: ${{ vars.OPENROUTER_RATE_LIMIT_FALLBACK_SECONDS != '' && vars.OPENROUTER_RATE_LIMIT_FALLBACK_SECONDS || '30' }}
+      OPENROUTER_USAGE_SETTLE_SECONDS: ${{ vars.OPENROUTER_USAGE_SETTLE_SECONDS != '' && vars.OPENROUTER_USAGE_SETTLE_SECONDS || '12' }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check required secrets
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "::error::OPENROUTER_API_KEY repository secret is not set"
+            exit 1
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -28,22 +57,10 @@ jobs:
         run: docker compose up -d --wait
 
       - name: Bootstrap Home Assistant
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
-          PYTHONPATH: src
         run: .venv/bin/python bootstrap.py
 
       - name: Run conversational tests
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MANAGEMENT_KEY: ${{ secrets.OPENROUTER_MANAGEMENT_KEY }}
-          PYTHONPATH: src
-        run: |
-          set -a
-          source .env
-          set +a
-          .venv/bin/pytest tests/ -v --tb=short
+        run: .venv/bin/pytest tests/ -v --tb=short
 
       - name: Upload reports
         if: always()
@@ -51,3 +68,37 @@ jobs:
         with:
           name: benchmark-reports
           path: reports/
+
+  deploy:
+    needs: test
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-reports
+          path: reports
+
+      - uses: actions/checkout@v4
+
+      - name: Build static site
+        run: |
+          mkdir -p _site
+          cp -r docs/* _site/
+          cp -r reports _site/reports/
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

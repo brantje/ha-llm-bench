@@ -13,11 +13,20 @@ import {
 import { renderAll, populateRunSelect } from "./render.js";
 import { destroyCharts } from "./charts.js";
 
-const PATHS = {
-  report: "../reports/report.json",
-  results: "../reports/results.json",
-  historyIndex: "../reports/history/index.json",
-};
+/** Reports base: local dev serves /docs/ from repo root; Pages serves docs as site root. */
+function reportsBase() {
+  return window.location.pathname.includes("/docs") ? "../reports/" : "reports/";
+}
+
+function reportPath(relative) {
+  return `${reportsBase()}${relative}`;
+}
+
+const paths = () => ({
+  report: reportPath("report.json"),
+  results: reportPath("results.json"),
+  historyIndex: reportPath("history/index.json"),
+});
 
 /** @type {{ id: string, label: string, url: string }[]} */
 let runSources = [];
@@ -49,6 +58,7 @@ async function loadSource(sourceId) {
 }
 
 async function buildRunSources() {
+  const PATHS = paths();
   const sources = [
     { id: "report", label: "Current report", url: PATHS.report },
     { id: "results", label: "Live results", url: PATHS.results },
@@ -61,9 +71,9 @@ async function buildRunSources() {
         const path =
           entry.path ||
           `history/${sanitizeRunId(entry.run_id)}/report.json`;
-        const url = path.startsWith("../")
+        const url = path.startsWith("../") || path.startsWith("reports/")
           ? path
-          : `../reports/${path}`;
+          : reportPath(path);
         const started = entry.started_at
           ? new Date(entry.started_at).toLocaleString()
           : entry.run_id;
@@ -103,7 +113,7 @@ async function selectRun(sourceId) {
     );
   } catch (e) {
     if (errEl) {
-      errEl.textContent = `Failed to load: ${e.message}. Serve from repo root: python3 -m http.server 8080 → http://localhost:8080/docs/`;
+      errEl.textContent = `Failed to load: ${e.message}. Local: python3 -m http.server 8080 from repo root → http://localhost:8080/docs/ — or open the GitHub Pages URL after a main-branch deploy.`;
       errEl.classList.remove("hidden");
     }
     setViewModel(null);
@@ -118,7 +128,7 @@ function setupRefresh() {
   const cb = document.getElementById("live-refresh");
   if (!cb?.checked || state.sourceId !== "results") return;
   state.refreshInterval = setInterval(async () => {
-    reportCache.delete(PATHS.results);
+    reportCache.delete(paths().results);
     await selectRun("results");
   }, 30000);
 }

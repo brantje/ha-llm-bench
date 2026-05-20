@@ -36,15 +36,41 @@ from ha_test.openrouter_setup import (
 )
 
 
+def is_ci() -> bool:
+    return os.environ.get("GITHUB_ACTIONS", "").lower() in ("1", "true", "yes")
+
+
+def load_dotenv_if_local() -> None:
+    if not is_ci() and ENV_PATH.exists():
+        load_dotenv(ENV_PATH, override=False)
+
+
 def load_env() -> dict[str, str]:
-    values = dotenv_values(ENV_PATH)
-    return {k: v for k, v in values.items() if v is not None}
+    """Merge .env file (local) with os.environ; environment variables win."""
+    merged: dict[str, str] = {}
+    if ENV_PATH.exists():
+        merged.update({k: v for k, v in dotenv_values(ENV_PATH).items() if v is not None})
+    for key, value in os.environ.items():
+        if value is not None and value != "":
+            merged[key] = value
+    return merged
 
 
 def save_env_value(key: str, value: str) -> None:
+    if is_ci():
+        return
     if not ENV_PATH.exists():
         ENV_PATH.write_text("")
     set_key(str(ENV_PATH), key, value)
+
+
+def export_github_env(key: str, value: str) -> None:
+    """Persist values for subsequent GitHub Actions steps via GITHUB_ENV."""
+    github_env = os.environ.get("GITHUB_ENV")
+    if not github_env:
+        return
+    with open(github_env, "a", encoding="utf-8") as handle:
+        handle.write(f"{key}={value}\n")
 
 
 def wait_for_ha(base_url: str, timeout: int = STARTUP_TIMEOUT) -> None:
@@ -371,6 +397,9 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
     TOKEN_PATH.write_text(token)
     save_env_value("HA_TOKEN", token)
     save_env_value("HA_URL", base_url)
+    if is_ci():
+        export_github_env("HA_TOKEN", token)
+        export_github_env("HA_URL", base_url)
 
     env = load_env()
     api_key = env.get("OPENROUTER_API_KEY")
@@ -386,6 +415,8 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
         subentry_id = entry["_conversation_subentry_id"]
         agent_id = entry["_conversation_agent_id"]
         save_env_value("HA_CONVERSATION_AGENT_ID", agent_id)
+        if is_ci():
+            export_github_env("HA_CONVERSATION_AGENT_ID", agent_id)
         print(f"Configured OpenRouter model: {model}")
         print(f"Conversation subentry: {subentry_id}")
         print(f"Conversation agent: {agent_id}")
@@ -413,7 +444,7 @@ def main() -> None:
         help="List archived benchmark runs and exit",
     )
     args = parser.parse_args()
-    load_dotenv(ENV_PATH, override=True)
+    load_dotenv_if_local()
     if args.history:
         from ha_test.history import print_history_list
 
