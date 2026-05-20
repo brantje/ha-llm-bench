@@ -126,7 +126,12 @@ def run_entity_test(
         if verify:
             verify(state)
         after = snapshot_tracked_states(ha_client.get_all_states())
-        flags = classify_outcome(result, entity_snapshot, after)
+        flags = classify_outcome(
+            result,
+            entity_snapshot,
+            after,
+            expected_entity_ids={entity_id},
+        )
         record_test_result(
             nodeid=nodeid,
             model=model,
@@ -143,7 +148,12 @@ def run_entity_test(
     except Exception as exc:
         actual_state = ha_client.get_state(entity_id)
         after = snapshot_tracked_states(ha_client.get_all_states())
-        flags = classify_outcome(result, entity_snapshot, after)
+        flags = classify_outcome(
+            result,
+            entity_snapshot,
+            after,
+            expected_entity_ids={entity_id},
+        )
         record_failure(
             nodeid=nodeid,
             model=model,
@@ -178,7 +188,7 @@ def run_negative_test(
     before = snapshot_tracked_states(ha_client.get_all_states())
     result = conversation(command)
     after = snapshot_tracked_states(ha_client.get_all_states())
-    flags = classify_outcome(result, before, after)
+    flags = classify_outcome(result, before, after, expected_entity_ids=set())
     changed = get_changed_entities(before, after)
     try:
         if changed:
@@ -239,7 +249,13 @@ def run_implicit_choice_test(
 
     result = conversation(command)
     after = snapshot_tracked_states(ha_client.get_all_states())
-    flags = classify_outcome(result, entity_snapshot, after)
+    expected_entity_ids = {entity_id for entity_id, _ in choices}
+    flags = classify_outcome(
+        result,
+        entity_snapshot,
+        after,
+        expected_entity_ids=expected_entity_ids,
+    )
     clarified = accept_clarification and is_clarification(result)
 
     matched_entity_id: str | None = None

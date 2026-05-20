@@ -10,6 +10,10 @@ ENTITY_CATALOG = {
     "light.lamp_x": {
         "friendly_name": "Lamp X",
         "domain": "light",
+        "related_entities": (
+            "input_boolean.lamp_x_power",
+            "input_number.lamp_x_brightness",
+        ),
         "setup": lambda client: (
             client.set_helper_state("input_boolean.lamp_x_power", True),
             client.set_helper_state("input_number.lamp_x_brightness", 255),
@@ -18,11 +22,17 @@ ENTITY_CATALOG = {
     "switch.tv_switch": {
         "friendly_name": "TV Switch",
         "domain": "switch",
+        "related_entities": ("input_boolean.tv_switch",),
         "setup": lambda client: client.set_helper_state("input_boolean.tv_switch", False),
     },
     "climate.living_room": {
         "friendly_name": "Living Room",
         "domain": "climate",
+        "related_entities": (
+            "input_number.living_room_temp",
+            "input_select.living_room_hvac",
+            "input_boolean.living_room_heater",
+        ),
         "setup": lambda client: (
             client.set_helper_state("input_number.living_room_temp", 21),
             client.set_helper_state("input_select.living_room_hvac", "heat"),
@@ -34,6 +44,26 @@ ENTITY_CATALOG = {
         ),
     },
 }
+
+
+def allowed_entities_for(*entity_ids: str) -> set[str]:
+    """Entities that may change during a test without counting as hallucination."""
+    if not entity_ids:
+        return set()
+
+    allowed: set[str] = set(entity_ids)
+    for entity_id in entity_ids:
+        entry = ENTITY_CATALOG.get(entity_id)
+        if entry:
+            allowed.update(entry.get("related_entities", ()))
+
+    for catalog_id, entry in ENTITY_CATALOG.items():
+        related = entry.get("related_entities", ())
+        if any(entity_id in related for entity_id in entity_ids):
+            allowed.add(catalog_id)
+            allowed.update(related)
+
+    return allowed
 
 
 def setup_entity(client, entity_id: str) -> None:
@@ -112,34 +142,25 @@ def is_clarification(result) -> bool:
 
 
 def is_hallucination(
-    result,
     before: dict[str, dict[str, Any]],
     after: dict[str, dict[str, Any]],
-    allowed_entities: set[str] | None = None,
+    allowed_entities: set[str],
 ) -> bool:
-    allowed = allowed_entities or set(ENTITY_CATALOG)
-    changed = [
-        entity_id
-        for entity_id, old_state in before.items()
-        if after.get(entity_id, {}).get("state") != old_state.get("state")
-    ]
-    unexpected = [entity_id for entity_id in changed if entity_id not in allowed]
-    if unexpected:
-        return True
-    speech = (result.speech or "").lower()
-    if "moon door" in speech or "spaceship" in speech:
-        return False
-    return False
+    changed = get_changed_entities(before, after)
+    return any(entity_id not in allowed_entities for entity_id in changed)
 
 
 def classify_outcome(
     result,
     before: dict[str, dict[str, Any]],
     after: dict[str, dict[str, Any]],
+    *,
+    expected_entity_ids: set[str] | None = None,
 ) -> dict[str, bool]:
+    allowed = allowed_entities_for(*(expected_entity_ids or ()))
     return {
         "clarification": is_clarification(result),
-        "hallucination": is_hallucination(result, before, after),
+        "hallucination": is_hallucination(before, after, allowed),
     }
 
 
