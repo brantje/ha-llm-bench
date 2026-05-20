@@ -28,17 +28,17 @@ template:
               value: "{{ brightness }}"
 
   - switch:
-      - name: Fan Switch
-        unique_id: fan_switch
-        state: "{{ is_state('input_boolean.fan_switch', 'on') }}"
+      - name: TV Switch
+        unique_id: tv_switch
+        state: "{{ is_state('input_boolean.tv_switch', 'on') }}"
         turn_on:
           action: input_boolean.turn_on
           target:
-            entity_id: input_boolean.fan_switch
+            entity_id: input_boolean.tv_switch
         turn_off:
           action: input_boolean.turn_off
           target:
-            entity_id: input_boolean.fan_switch
+            entity_id: input_boolean.tv_switch
 
   - sensor:
       - name: Living Room Temperature

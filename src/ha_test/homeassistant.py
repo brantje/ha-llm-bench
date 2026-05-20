@@ -17,10 +17,18 @@ from ha_test.rate_limit import (
     wait_for_openrouter_rate_limit,
 )
 
-from ha_test.openrouter import env_value
+from ha_test.openrouter import (
+    env_value,
+    activity_tokens_delta,
+    estimate_tokens_from_cost,
+    get_api_key_usage,
+    get_model_activity_totals,
+    parse_csv_ids,
+    usage_settle_seconds,
+)
 from ha_test.openrouter_setup import (
-    list_entity_registry,
-    reconfigure_conversation_subentry,
+    ensure_conversation_for_model,
+    find_openrouter_entry,
     resolve_agent_for_subentry,
 )
 
@@ -31,6 +39,10 @@ class ConversationResult:
     latency_ms: float
     response_type: str | None = None
     speech: str | None = None
+    cost_usd: float | None = None
+    prompt_tokens: float | None = None
+    completion_tokens: float | None = None
+    total_tokens: float | None = None
 
 
 class HomeAssistantClient:
@@ -40,6 +52,7 @@ class HomeAssistantClient:
         self.agent_id = agent_id
         self._entry_id: str | None = None
         self._conversation_subentry_id: str | None = None
+        self._active_model_id: str | None = None
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -57,6 +70,35 @@ class HomeAssistantClient:
             timeout=kwargs.pop("timeout", 90),
             **kwargs,
         )
+
+    def _resolve_model_id(self) -> str | None:
+        model_id = self._active_model_id or env_value("OPENROUTER_MODEL")
+        if not model_id:
+            return None
+        if "," in model_id:
+            parsed = parse_csv_ids(model_id)
+            return parsed[0] if parsed else model_id
+        return model_id
+
+    def _poll_activity_token_delta(
+        self,
+        model_id: str,
+        activity_before: dict[str, float],
+    ) -> dict[str, float] | None:
+        settle_seconds = usage_settle_seconds()
+        deadline = time.monotonic() + settle_seconds
+        while time.monotonic() < deadline:
+            activity_after = get_model_activity_totals(model_id)
+            delta = activity_tokens_delta(activity_before, activity_after)
+            if delta["requests"] > 0 or delta["total_tokens"] > 0:
+                return delta
+            time.sleep(0.5)
+
+        activity_after = get_model_activity_totals(model_id)
+        delta = activity_tokens_delta(activity_before, activity_after)
+        if delta["requests"] > 0 or delta["total_tokens"] > 0:
+            return delta
+        return None
 
     def process_conversation(
         self,
@@ -77,21 +119,63 @@ class HomeAssistantClient:
             if selected_agent:
                 payload["agent_id"] = selected_agent
 
+            usage_before = get_api_key_usage(api_key)
+            model_id = self._resolve_model_id()
+            activity_before = None
+            if model_id and env_value("OPENROUTER_MANAGEMENT_KEY"):
+                activity_before = get_model_activity_totals(model_id)
+
             start = time.perf_counter()
             response = self._request("POST", "/api/conversation/process", json=payload)
             latency_ms = (time.perf_counter() - start) * 1000
             response.raise_for_status()
             body = response.json()
+            usage_after = usage_before
+            if usage_before is not None:
+                settle_seconds = usage_settle_seconds()
+                deadline = time.monotonic() + settle_seconds
+                while time.monotonic() < deadline:
+                    current_usage = get_api_key_usage(api_key)
+                    if current_usage is not None and current_usage > usage_before:
+                        usage_after = current_usage
+                        break
+                    time.sleep(0.5)
+                else:
+                    usage_after = get_api_key_usage(api_key)
+            cost_usd = None
+            if usage_before is not None and usage_after is not None:
+                cost_usd = max(0.0, usage_after - usage_before)
+
             response_obj = body.get("response") or {}
             speech = None
             if response_obj.get("speech"):
                 speech = response_obj["speech"].get("plain", {}).get("speech")
+
+            prompt_tokens = None
+            completion_tokens = None
+            total_tokens = None
+            if cost_usd is not None and cost_usd > 0 and model_id:
+                estimated = estimate_tokens_from_cost(model_id, cost_usd)
+                prompt_tokens = estimated["prompt_tokens"]
+                completion_tokens = estimated["completion_tokens"]
+                total_tokens = estimated["total_tokens"]
+            elif activity_before is not None and model_id:
+                token_delta = self._poll_activity_token_delta(model_id, activity_before)
+                if token_delta:
+                    prompt_tokens = token_delta["prompt_tokens"]
+                    completion_tokens = token_delta["completion_tokens"]
+                    total_tokens = token_delta["total_tokens"]
+
             last_result = ConversationResult(
                 text=text,
                 response=body,
                 latency_ms=latency_ms,
                 response_type=response_obj.get("response_type"),
                 speech=speech,
+                cost_usd=cost_usd,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
             )
             if last_result.response_type != "error":
                 return last_result
@@ -208,55 +292,20 @@ class HomeAssistantClient:
                 return entry.get("config_subentry_id")
         return None
 
-    def _ensure_openrouter_metadata(self) -> tuple[str, str]:
-        if self._entry_id and self._conversation_subentry_id:
-            return self._entry_id, self._conversation_subentry_id
-
-        preferred_agent = self.agent_id or env_value("HA_CONVERSATION_AGENT_ID")
-        preferred_subentry_id = None
-        if preferred_agent and preferred_agent != "conversation.home_assistant":
-            preferred_subentry_id = self._lookup_subentry_for_agent(preferred_agent)
-
-        for entry in self.get_config_entries():
-            if entry.get("domain") != "open_router":
-                continue
-            self._entry_id = entry["entry_id"]
-            subentries = self.list_openrouter_subentries()
-            conversation_subentries = [
-                subentry
-                for subentry in subentries
-                if subentry.get("subentry_type") == "conversation"
-            ]
-            if not conversation_subentries:
-                break
-            if preferred_subentry_id:
-                match = next(
-                    (
-                        subentry
-                        for subentry in conversation_subentries
-                        if subentry["subentry_id"] == preferred_subentry_id
-                    ),
-                    None,
-                )
-                self._conversation_subentry_id = (
-                    match or conversation_subentries[0]
-                )["subentry_id"]
-            else:
-                self._conversation_subentry_id = conversation_subentries[0]["subentry_id"]
-            return self._entry_id, self._conversation_subentry_id
-        raise RuntimeError("OpenRouter conversation subentry not found")
-
     def reconfigure_openrouter_model(self, model_id: str) -> None:
-        entry_id, subentry_id = self._ensure_openrouter_metadata()
-        reconfigure_conversation_subentry(
+        entry = find_openrouter_entry(self.get_config_entries())
+        if entry is None:
+            raise RuntimeError("OpenRouter config entry not found")
+        subentry_id, agent_id = ensure_conversation_for_model(
             self.base_url,
             self.token,
-            entry_id,
-            subentry_id,
+            entry["entry_id"],
             model_id,
         )
+        self._entry_id = entry["entry_id"]
         self._conversation_subentry_id = subentry_id
-        self.agent_id = self.get_conversation_agent_id()
+        self.agent_id = agent_id
+        self._active_model_id = model_id
 
     def get_conversation_agent_id(self) -> str:
         if self._conversation_subentry_id:
@@ -269,13 +318,19 @@ class HomeAssistantClient:
                 self.agent_id = agent_id
                 return agent_id
 
-        preferred_agent = self.agent_id or env_value("HA_CONVERSATION_AGENT_ID")
-        if preferred_agent and preferred_agent != "conversation.home_assistant":
-            subentry_id = self._lookup_subentry_for_agent(preferred_agent)
+        if self.agent_id and self.agent_id != "conversation.home_assistant":
+            subentry_id = self._lookup_subentry_for_agent(self.agent_id)
             if subentry_id:
                 self._conversation_subentry_id = subentry_id
-            self.agent_id = preferred_agent
-            return preferred_agent
+            return self.agent_id
+
+        env_agent = env_value("HA_CONVERSATION_AGENT_ID")
+        if env_agent and env_agent != "conversation.home_assistant":
+            subentry_id = self._lookup_subentry_for_agent(env_agent)
+            if subentry_id:
+                self._conversation_subentry_id = subentry_id
+            self.agent_id = env_agent
+            return env_agent
 
         agents = [
             entity_id

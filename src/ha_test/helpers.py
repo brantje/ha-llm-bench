@@ -15,10 +15,10 @@ ENTITY_CATALOG = {
             client.set_helper_state("input_number.lamp_x_brightness", 255),
         ),
     },
-    "switch.fan_switch": {
-        "friendly_name": "Fan Switch",
+    "switch.tv_switch": {
+        "friendly_name": "TV Switch",
         "domain": "switch",
-        "setup": lambda client: client.set_helper_state("input_boolean.fan_switch", False),
+        "setup": lambda client: client.set_helper_state("input_boolean.tv_switch", False),
     },
     "climate.living_room": {
         "friendly_name": "Living Room",

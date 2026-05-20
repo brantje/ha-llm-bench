@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 import httpx
 import websockets
-from dotenv import dotenv_values, set_key
+from dotenv import dotenv_values, load_dotenv, set_key
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -33,9 +33,6 @@ from ha_test.openrouter_setup import (
     configure_openrouter_conversation,
     find_openrouter_entry,
     get_config_entries,
-    list_entity_registry,
-    list_subentries,
-    resolve_agent_for_subentry,
 )
 
 
@@ -282,22 +279,11 @@ def configure_openrouter(base_url: str, token: str, api_key: str, model: str) ->
         entry_id = entry["entry_id"]
 
     time.sleep(2)
-    env = load_env()
-    preferred_subentry_id = None
-    preferred_agent = env.get("HA_CONVERSATION_AGENT_ID")
-    if preferred_agent:
-        for registry_entry in list_entity_registry(base_url, token):
-            if registry_entry.get("entity_id") == preferred_agent:
-                preferred_subentry_id = registry_entry.get("config_subentry_id")
-                break
-
     subentry_id, agent_id = configure_openrouter_conversation(
         base_url,
         token,
         entry_id,
         model,
-        preferred_subentry_id=preferred_subentry_id,
-        dedupe=True,
     )
 
     entries = get_config_entries(base_url, token)
@@ -322,17 +308,12 @@ def snapshot_baseline_states(base_url: str, token: str) -> None:
 
 
 def resolve_default_model(env: dict[str, str]) -> str:
-    if env.get("OPENROUTER_MODEL"):
-        return env["OPENROUTER_MODEL"]
-    api_key = env.get("OPENROUTER_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY is required to configure OpenRouter")
-    from ha_test.openrouter import get_free_models
+    from ha_test.openrouter import get_target_model_ids
 
-    models = get_free_models(api_key)
-    if not models:
-        raise RuntimeError("No free tool-capable models found on OpenRouter")
-    return models[0]["id"]
+    models = get_target_model_ids(env.get("OPENROUTER_API_KEY"))
+    if not models or models == ["unconfigured"]:
+        raise RuntimeError("No OpenRouter models matched the configured filters")
+    return models[0]
 
 
 def token_is_valid(base_url: str, token: str) -> bool:
@@ -380,6 +361,11 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
     env = load_env()
     api_key = env.get("OPENROUTER_API_KEY")
     if api_key:
+        from ha_test.test_plan import print_test_plan
+
+        print("Test plan preview:")
+        print_test_plan(api_key)
+        print("")
         model = resolve_default_model(env)
         entry = configure_openrouter(base_url, token, api_key, model)
         subentry_id = entry["_conversation_subentry_id"]
@@ -388,9 +374,9 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
         print(f"Configured OpenRouter model: {model}")
         print(f"Conversation subentry: {subentry_id}")
         print(f"Conversation agent: {agent_id}")
-        subentries = list_subentries(base_url, token, entry["entry_id"])
-        subentry = next(item for item in subentries if item["subentry_id"] == subentry_id)
-        if subentry.get("title") and model not in subentry["title"].lower():
+        from ha_test.openrouter_setup import models_match
+
+        if not models_match(model, agent_id):
             print(
                 "Note: the agent entity name/title may still reflect an older model; "
                 "the configured model above is what OpenRouter will use."
@@ -407,6 +393,7 @@ def main() -> None:
     parser.add_argument("--reset", action="store_true", help="Remove .storage before bootstrapping")
     parser.add_argument("--url", default=HA_URL, help="Home Assistant base URL")
     args = parser.parse_args()
+    load_dotenv(ENV_PATH, override=True)
     bootstrap(args.url, reset=args.reset)
 
 

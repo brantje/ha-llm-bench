@@ -150,17 +150,102 @@ def conversation_payload(model: str) -> dict[str, Any]:
     }
 
 
+def _normalize_for_match(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _model_match_keys(model: str) -> set[str]:
+    keys = {_normalize_for_match(model)}
+    if "/" in model:
+        slug = model.rsplit("/", 1)[-1]
+        keys.add(_normalize_for_match(slug))
+        keys.add(_normalize_for_match(slug.replace(":free", "")))
+    return {key for key in keys if key}
+
+
+def models_match(left: str, right: str) -> bool:
+    right_norm = _normalize_for_match(right)
+    if not right_norm:
+        return False
+    for left_key in _model_match_keys(left):
+        if left_key == right_norm or left_key in right_norm or right_norm in left_key:
+            return True
+    return False
+
+
+def find_conversation_subentry_for_model(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    model: str,
+) -> dict[str, Any] | None:
+    for subentry in list_subentries(base_url, token, entry_id):
+        if subentry.get("subentry_type") != "conversation":
+            continue
+        title = subentry.get("title") or ""
+        if models_match(model, title):
+            return subentry
+        agent_id = resolve_agent_for_subentry(base_url, token, subentry["subentry_id"])
+        if agent_id and models_match(model, agent_id):
+            return subentry
+    return None
+
+
+def ensure_conversation_for_model(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    model: str,
+) -> tuple[str, str]:
+    matched = find_conversation_subentry_for_model(base_url, token, entry_id, model)
+    if matched:
+        subentry_id = matched["subentry_id"]
+    else:
+        subentry_id = create_conversation_subentry(base_url, token, entry_id, model)
+
+    reconfigure_conversation_subentry(base_url, token, entry_id, subentry_id, model)
+    agent_id = resolve_agent_for_subentry(base_url, token, subentry_id)
+    if agent_id is None:
+        raise RuntimeError(
+            f"No conversation agent entity found for OpenRouter model {model!r}"
+        )
+    return subentry_id, agent_id
+
+
 def create_conversation_subentry(
     base_url: str,
     token: str,
     entry_id: str,
     model: str,
 ) -> str:
+    before = {
+        subentry["subentry_id"]
+        for subentry in list_subentries(base_url, token, entry_id)
+        if subentry.get("subentry_type") == "conversation"
+    }
     flow = start_subentry_flow(base_url, token, entry_id, "conversation")
     result = submit_subentry_flow(base_url, token, flow["flow_id"], conversation_payload(model))
+    created = result.get("result") or {}
+    subentry_id = created.get("subentry_id")
+    if subentry_id:
+        return subentry_id
+
     if result.get("type") != "create_entry":
         raise RuntimeError(f"Unexpected conversation subentry result: {result}")
-    return result["result"]["subentry_id"]
+
+    matched = find_conversation_subentry_for_model(base_url, token, entry_id, model)
+    if matched:
+        return matched["subentry_id"]
+
+    after = [
+        subentry
+        for subentry in list_subentries(base_url, token, entry_id)
+        if subentry.get("subentry_type") == "conversation"
+        and subentry["subentry_id"] not in before
+    ]
+    if len(after) == 1:
+        return after[0]["subentry_id"]
+    raise RuntimeError(f"Could not resolve created conversation subentry: {result}")
 
 
 def reconfigure_conversation_subentry(
@@ -226,29 +311,5 @@ def configure_openrouter_conversation(
     preferred_subentry_id: str | None = None,
     dedupe: bool = True,
 ) -> tuple[str, str]:
-    conversation_subentries = [
-        subentry
-        for subentry in list_subentries(base_url, token, entry_id)
-        if subentry.get("subentry_type") == "conversation"
-    ]
-
-    if dedupe and len(conversation_subentries) > 1:
-        conversation_subentries = dedupe_conversation_subentries(
-            base_url,
-            token,
-            entry_id,
-            keep_subentry_id=preferred_subentry_id,
-        )
-
-    if conversation_subentries:
-        subentry_id = conversation_subentries[0]["subentry_id"]
-        reconfigure_conversation_subentry(base_url, token, entry_id, subentry_id, model)
-    else:
-        subentry_id = create_conversation_subentry(base_url, token, entry_id, model)
-
-    agent_id = resolve_agent_for_subentry(base_url, token, subentry_id)
-    if agent_id is None:
-        raise RuntimeError(
-            f"No conversation agent entity found for OpenRouter subentry {subentry_id}"
-        )
-    return subentry_id, agent_id
+    del preferred_subentry_id, dedupe
+    return ensure_conversation_for_model(base_url, token, entry_id, model)

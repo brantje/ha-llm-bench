@@ -15,6 +15,22 @@ from ha_test.helpers import (
 from ha_test.reporting import record_test_result
 
 
+def usage_from_result(result: Any | None) -> dict[str, float | None]:
+    if result is None:
+        return {
+            "cost_usd": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+        }
+    return {
+        "cost_usd": getattr(result, "cost_usd", None),
+        "prompt_tokens": getattr(result, "prompt_tokens", None),
+        "completion_tokens": getattr(result, "completion_tokens", None),
+        "total_tokens": getattr(result, "total_tokens", None),
+    }
+
+
 def format_state_summary(state: dict[str, Any] | None) -> str | None:
     if state is None:
         return None
@@ -83,6 +99,7 @@ def record_failure(
         clarification=clarification,
         hallucination=hallucination,
         incorrect_entity_targeting=incorrect_entity_targeting,
+        **usage_from_result(result),
     )
 
 
@@ -121,6 +138,7 @@ def run_entity_test(
             response_type=result.response_type,
             actual_state=format_state_summary(state),
             **flags,
+            **usage_from_result(result),
         )
     except Exception as exc:
         actual_state = ha_client.get_state(entity_id)
@@ -179,6 +197,7 @@ def run_negative_test(
             response_speech=result.speech,
             response_type=result.response_type,
             **flags,
+            **usage_from_result(result),
         )
     except AssertionError as exc:
         record_failure(
@@ -249,6 +268,7 @@ def run_implicit_choice_test(
             actual_state=format_state_summary(matched_state),
             clarification=clarified,
             **{key: value for key, value in flags.items() if key != "clarification"},
+            **usage_from_result(result),
         )
         return
 

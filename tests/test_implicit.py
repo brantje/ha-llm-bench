@@ -57,11 +57,11 @@ def test_turn_on_the_thing(request, ha_client, model, conversation, entity_snaps
         entity_snapshot=entity_snapshot,
         choices=[
             ("light.lamp_x", lambda state: state["state"] == "on"),
-            ("switch.fan_switch", lambda state: state["state"] == "on"),
+            ("switch.tv_switch", lambda state: state["state"] == "on"),
         ],
         setup=lambda client: (
             client.set_helper_state("input_boolean.lamp_x_power", False),
             client.set_helper_state("input_number.lamp_x_brightness", 0),
-            client.set_helper_state("input_boolean.fan_switch", False),
+            client.set_helper_state("input_boolean.tv_switch", False),
         ),
     )

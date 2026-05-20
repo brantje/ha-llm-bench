@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 import os
 import statistics
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ha_test.openrouter import aggregate_activity_for_models, get_activity
+from ha_test.openrouter import (
+    env_value,
+    estimate_tokens_from_activity_history,
+    get_activity_totals_for_models,
+    get_model_pricing_lookup,
+)
 
 REPORTS_DIR = Path(__file__).resolve().parent.parent.parent / "reports"
 
@@ -31,6 +36,10 @@ class TestRecord:
     clarification: bool = False
     hallucination: bool = False
     incorrect_entity_targeting: bool = False
+    cost_usd: float | None = None
+    prompt_tokens: float | None = None
+    completion_tokens: float | None = None
+    total_tokens: float | None = None
 
 
 @dataclass
@@ -64,6 +73,10 @@ def record_test_result(
     clarification: bool = False,
     hallucination: bool = False,
     incorrect_entity_targeting: bool = False,
+    cost_usd: float | None = None,
+    prompt_tokens: float | None = None,
+    completion_tokens: float | None = None,
+    total_tokens: float | None = None,
 ) -> None:
     RUN_METRICS.add_record(
         TestRecord(
@@ -81,8 +94,13 @@ def record_test_result(
             clarification=clarification,
             hallucination=hallucination,
             incorrect_entity_targeting=incorrect_entity_targeting,
+            cost_usd=cost_usd,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
         )
     )
+    write_results_json()
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -93,50 +111,167 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[index]
 
 
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    minutes = int(seconds // 60)
+    remaining_seconds = seconds % 60
+    if remaining_seconds < 0.05:
+        return f"{minutes}m"
+    return f"{minutes}m {remaining_seconds:.0f}s"
+
+
+def tokens_per_second(completion_tokens: float | None, latency_ms: float) -> float | None:
+    if completion_tokens is None or latency_ms <= 0:
+        return None
+    return round(completion_tokens / (latency_ms / 1000), 4)
+
+
+def test_record_to_dict(record: TestRecord) -> dict[str, Any]:
+    data = asdict(record)
+    data.pop("model", None)
+    data["tokens_per_second"] = tokens_per_second(record.completion_tokens, record.latency_ms)
+    return data
+
+
+def records_with_usage_allocated(
+    records: list[TestRecord],
+    usage: dict[str, float | None],
+) -> list[TestRecord]:
+    total_tokens = usage.get("total_tokens")
+    if not total_tokens:
+        return records
+    if all(record.total_tokens is not None for record in records):
+        return records
+
+    missing = [record for record in records if record.total_tokens is None]
+    if not missing:
+        return records
+
+    prompt_total = float(usage.get("prompt_tokens") or 0.0)
+    completion_total = float(usage.get("completion_tokens") or 0.0)
+    latency_total = sum(record.latency_ms for record in missing) or float(len(missing))
+
+    allocated: list[TestRecord] = []
+    for record in records:
+        if record.total_tokens is not None:
+            allocated.append(record)
+            continue
+        share = record.latency_ms / latency_total if latency_total else 1 / len(missing)
+        allocated.append(
+            replace(
+                record,
+                prompt_tokens=prompt_total * share,
+                completion_tokens=completion_total * share,
+                total_tokens=float(total_tokens) * share,
+            )
+        )
+    return allocated
+
+
+def resolve_model_usage(
+    model: str,
+    records: list[TestRecord],
+    activity_totals: dict[str, dict[str, float]],
+) -> dict[str, float | None]:
+    session_cost = sum(record.cost_usd or 0.0 for record in records)
+    session_prompt = sum(record.prompt_tokens or 0.0 for record in records)
+    session_completion = sum(record.completion_tokens or 0.0 for record in records)
+    session_total = sum(record.total_tokens or 0.0 for record in records)
+    has_session_cost = any(record.cost_usd is not None for record in records)
+    has_session_tokens = any(record.total_tokens is not None for record in records)
+
+    activity = activity_totals.get(model, {})
+    if has_session_cost and session_cost > 0:
+        cost_usd = session_cost
+    elif activity:
+        cost_usd = activity.get("cost_usd", 0.0)
+    elif has_session_cost:
+        cost_usd = session_cost
+    else:
+        cost_usd = None
+
+    if has_session_tokens and session_total > 0:
+        prompt_tokens = session_prompt
+        completion_tokens = session_completion
+        total_tokens = session_total
+    elif activity and (activity.get("total_tokens") or 0) > 0:
+        prompt_tokens = activity.get("prompt_tokens", 0.0)
+        completion_tokens = activity.get("completion_tokens", 0.0)
+        total_tokens = activity.get("total_tokens", 0.0)
+    elif activity:
+        estimated = estimate_tokens_from_activity_history(activity, len(records))
+        prompt_tokens = estimated["prompt_tokens"]
+        completion_tokens = estimated["completion_tokens"]
+        total_tokens = estimated["total_tokens"]
+    else:
+        prompt_tokens = None
+        completion_tokens = None
+        total_tokens = None
+
+    return {
+        "cost_usd": cost_usd,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def build_model_report(
     model: str,
     records: list[TestRecord],
     activity_totals: dict[str, dict[str, float]],
+    pricing_lookup: dict[str, dict[str, str]],
 ) -> dict[str, Any]:
     latencies = [record.latency_ms for record in records]
     passed = sum(1 for record in records if record.outcome == "passed")
     failed = len(records) - passed
-    activity = activity_totals.get(model, {})
-    total_latency_seconds = sum(latencies) / 1000 if latencies else 0.0
-    completion_tokens = activity.get("completion_tokens", 0.0)
+    usage = resolve_model_usage(model, records, activity_totals)
+    display_records = records_with_usage_allocated(records, usage)
+    total_test_time_ms = sum(latencies)
+    total_test_time_seconds = total_test_time_ms / 1000 if total_test_time_ms else 0.0
+    completion_tokens = float(usage["completion_tokens"] or 0.0)
     avg_tokens_per_second = (
-        completion_tokens / total_latency_seconds if total_latency_seconds > 0 else 0.0
+        completion_tokens / total_test_time_seconds if total_test_time_seconds > 0 else 0.0
     )
     return {
+        "pricing": pricing_lookup.get(model, {}),
         "tests_total": len(records),
         "tests_passed": passed,
         "tests_failed": failed,
+        "total_test_time_ms": total_test_time_ms,
+        "total_test_time_seconds": round(total_test_time_seconds, 3),
         "latency_ms": {
             "avg": statistics.mean(latencies) if latencies else 0.0,
             "p50": percentile(latencies, 50),
             "p95": percentile(latencies, 95),
         },
-        "cost_usd": activity.get("cost_usd") if activity else None,
-        "total_tokens": activity.get("total_tokens") if activity else None,
-        "prompt_tokens": activity.get("prompt_tokens") if activity else None,
-        "completion_tokens": activity.get("completion_tokens") if activity else None,
+        "cost_usd": usage["cost_usd"],
+        "total_tokens": usage["total_tokens"],
+        "prompt_tokens": usage["prompt_tokens"],
+        "completion_tokens": usage["completion_tokens"],
         "avg_tokens_per_second": round(avg_tokens_per_second, 4),
         "hallucination_count": sum(1 for record in records if record.hallucination),
         "clarification_count": sum(1 for record in records if record.clarification),
         "incorrect_entity_targeting": sum(
             1 for record in records if record.incorrect_entity_targeting
         ),
+        "tests": [test_record_to_dict(record) for record in display_records],
     }
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    summary = report["summary"]
     lines = [
         "# Home Assistant Conversational Benchmark",
         "",
         f"- Run ID: `{report['run_id']}`",
         f"- HA Version: `{report['ha_version']}`",
-        f"- Models tested: {report['summary']['models_tested']}",
-        f"- Overall pass rate: {report['summary']['overall_pass_rate']:.2%}",
+        f"- Models tested: {summary['models_tested']}",
+        f"- Overall pass rate: {summary['overall_pass_rate']:.2%}",
+        f"- Total test time: {format_duration(summary['total_test_time_seconds'])}",
+        f"- Total run time: {format_duration(summary['total_run_time_seconds'])}",
+        f"- Avg tokens/sec: {summary.get('avg_tokens_per_second')}",
         "",
         "## Model Results",
         "",
@@ -147,6 +282,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"### `{model}`",
                 "",
                 f"- Passed: {stats['tests_passed']}/{stats['tests_total']}",
+                f"- Total test time: {format_duration(stats['total_test_time_seconds'])}",
                 f"- Avg latency: {stats['latency_ms']['avg']:.0f} ms",
                 f"- Cost (USD): {stats['cost_usd']}",
                 f"- Avg tokens/sec: {stats['avg_tokens_per_second']}",
@@ -156,28 +292,33 @@ def render_markdown(report: dict[str, Any]) -> str:
             ]
         )
 
-    failures = [record for record in report["records"] if record.get("outcome") == "failed"]
+    failures = [
+        (model, test)
+        for model, stats in report["models"].items()
+        for test in stats.get("tests", [])
+        if test.get("outcome") == "failed"
+    ]
     if failures:
         lines.extend(["## Failures", ""])
-        for record in failures:
+        for model, test in failures:
             lines.extend(
                 [
-                    f"### `{record['nodeid']}` ({record['model']})",
+                    f"### `{test['nodeid']}` ({model})",
                     "",
-                    f"- Command: `{record.get('command')}`",
-                    f"- Reason: {record.get('failure_reason')}",
+                    f"- Command: `{test.get('command')}`",
+                    f"- Reason: {test.get('failure_reason')}",
                 ]
             )
-            if record.get("entity_id"):
-                lines.append(f"- Entity: `{record['entity_id']}`")
-            if record.get("response_type"):
-                lines.append(f"- Response type: `{record['response_type']}`")
-            if record.get("response_speech"):
-                lines.append(f"- Assistant said: {record['response_speech']}")
-            if record.get("actual_state"):
-                lines.append(f"- Actual state: `{record['actual_state']}`")
-            if record.get("changed_entities"):
-                lines.append(f"- Changed entities: `{record['changed_entities']}`")
+            if test.get("entity_id"):
+                lines.append(f"- Entity: `{test['entity_id']}`")
+            if test.get("response_type"):
+                lines.append(f"- Response type: `{test['response_type']}`")
+            if test.get("response_speech"):
+                lines.append(f"- Assistant said: {test['response_speech']}")
+            if test.get("actual_state"):
+                lines.append(f"- Actual state: `{test['actual_state']}`")
+            if test.get("changed_entities"):
+                lines.append(f"- Changed entities: `{test['changed_entities']}`")
             lines.append("")
 
     if report["summary"].get("activity_warning"):
@@ -185,50 +326,103 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def finalize_report(run_metrics: RunMetrics) -> dict[str, Any]:
-    run_metrics.finished_at = datetime.now(UTC).isoformat()
+def build_report(
+    run_metrics: RunMetrics,
+    *,
+    activity_totals: dict[str, dict[str, float]] | None = None,
+    activity_warning: str | None = None,
+    end_time: datetime | None = None,
+) -> dict[str, Any]:
     models = sorted({record.model for record in run_metrics.records})
-    activity_warning = None
-    activity_totals: dict[str, dict[str, float]] = {}
-    if os.environ.get("OPENROUTER_MANAGEMENT_KEY"):
-        date = run_metrics.started_at[:10]
-        activity = get_activity(date)
-        activity_totals = aggregate_activity_for_models(activity, set(models))
-    else:
-        activity_warning = (
-            "OPENROUTER_MANAGEMENT_KEY not set; cost and token totals are unavailable."
-        )
-
+    pricing_lookup = get_model_pricing_lookup()
     model_reports = {
         model: build_model_report(
             model,
             [record for record in run_metrics.records if record.model == model],
-            activity_totals,
+            activity_totals or {},
+            pricing_lookup,
         )
         for model in models
     }
     total_tests = len(run_metrics.records)
     passed_tests = sum(1 for record in run_metrics.records if record.outcome == "passed")
+    total_test_time_ms = sum(record.latency_ms for record in run_metrics.records)
+    total_test_time_seconds = total_test_time_ms / 1000 if total_test_time_ms else 0.0
+    started_at = datetime.fromisoformat(run_metrics.started_at)
+    finished_at = end_time or (
+        datetime.fromisoformat(run_metrics.finished_at) if run_metrics.finished_at else None
+    )
+    total_run_time_seconds = (
+        (finished_at - started_at).total_seconds() if finished_at else 0.0
+    )
     total_cost = sum(
         (stats["cost_usd"] or 0.0)
         for stats in model_reports.values()
         if stats["cost_usd"] is not None
     )
-    report = {
+    total_completion_tokens = sum(
+        float(stats["completion_tokens"] or 0.0)
+        for stats in model_reports.values()
+        if stats["completion_tokens"] is not None
+    )
+    avg_tokens_per_second = (
+        total_completion_tokens / total_test_time_seconds if total_test_time_seconds > 0 else 0.0
+    )
+    return {
         "run_id": run_metrics.run_id,
         "started_at": run_metrics.started_at,
-        "finished_at": run_metrics.finished_at,
+        "finished_at": finished_at.isoformat() if finished_at else None,
         "ha_version": run_metrics.ha_version,
         "models": model_reports,
         "summary": {
             "models_tested": len(models),
             "overall_pass_rate": (passed_tests / total_tests) if total_tests else 0.0,
+            "total_test_time_ms": total_test_time_ms,
+            "total_test_time_seconds": round(total_test_time_seconds, 3),
+            "total_run_time_seconds": round(total_run_time_seconds, 3),
             "total_cost_usd": total_cost,
+            "avg_tokens_per_second": round(avg_tokens_per_second, 4),
             "activity_warning": activity_warning,
         },
-        "records": [asdict(record) for record in run_metrics.records],
     }
+
+
+def fetch_activity_totals(run_metrics: RunMetrics) -> tuple[dict[str, dict[str, float]], str | None]:
+    models = sorted({record.model for record in run_metrics.records})
+    if env_value("OPENROUTER_MANAGEMENT_KEY"):
+        return get_activity_totals_for_models(set(models)), None
+    return {}, (
+        "OPENROUTER_MANAGEMENT_KEY not set; cost and token totals use session estimates only."
+    )
+
+
+def write_results_json(run_metrics: RunMetrics | None = None) -> None:
+    metrics = run_metrics or RUN_METRICS
+    if not metrics.records:
+        return
+    activity_totals, activity_warning = fetch_activity_totals(metrics)
+    report = build_report(
+        metrics,
+        activity_totals=activity_totals,
+        activity_warning=activity_warning,
+        end_time=datetime.now(UTC),
+    )
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    (REPORTS_DIR / "results.json").write_text(json.dumps(report, indent=2))
+
+
+def finalize_report(run_metrics: RunMetrics) -> dict[str, Any]:
+    run_metrics.finished_at = datetime.now(UTC).isoformat()
+    activity_totals, activity_warning = fetch_activity_totals(run_metrics)
+
+    report = build_report(
+        run_metrics,
+        activity_totals=activity_totals,
+        activity_warning=activity_warning,
+        end_time=datetime.fromisoformat(run_metrics.finished_at),
+    )
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     (REPORTS_DIR / "report.json").write_text(json.dumps(report, indent=2))
     (REPORTS_DIR / "report.md").write_text(render_markdown(report))
+    write_results_json(run_metrics)
     return report

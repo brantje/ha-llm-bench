@@ -10,7 +10,7 @@ from tests.conftest import (  # noqa: F401
     model,
     openrouter_models,
     record_test_result,
-    reset_fan_switch,
+    reset_tv_switch,
     reset_lamp_x,
     reset_living_room,
 )

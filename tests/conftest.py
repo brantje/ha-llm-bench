@@ -11,10 +11,37 @@ from dotenv import load_dotenv
 
 from ha_test.helpers import ENTITY_CATALOG, setup_entity, snapshot_tracked_states
 from ha_test.homeassistant import HomeAssistantClient
-from ha_test.openrouter import env_value, get_target_model_ids
+from ha_test.openrouter import env_value, get_target_model_ids, usage_settle_seconds
 from ha_test.reporting import RUN_METRICS, record_test_result
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+
+_configured_model: str | None = None
+
+
+def _model_for_item(item: pytest.Item) -> str:
+    if hasattr(item, "callspec") and item.callspec:
+        model = item.callspec.params.get("model")
+        if model is not None:
+            return str(model)
+    return ""
+
+
+def pytest_generate_tests(metafunc):
+    if "model" in metafunc.fixturenames:
+        metafunc.parametrize("model", get_target_model_ids())
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    model_order = {model: index for index, model in enumerate(get_target_model_ids())}
+    indexed_items = list(enumerate(items))
+    indexed_items.sort(
+        key=lambda pair: (
+            model_order.get(_model_for_item(pair[1]), len(model_order)),
+            pair[0],
+        )
+    )
+    items[:] = [item for _, item in indexed_items]
 
 
 def pytest_addoption(parser) -> None:
@@ -44,9 +71,9 @@ def ha_token() -> str:
 
 @pytest.fixture(scope="session")
 def openrouter_models() -> list[dict]:
-    model = env_value("OPENROUTER_MODEL")
-    if model:
-        return [{"id": model, "name": model}]
+    model_ids = get_target_model_ids()
+    if env_value("OPENROUTER_MODEL"):
+        return [{"id": model_id, "name": model_id} for model_id in model_ids]
     api_key = env_value("OPENROUTER_API_KEY")
     if not api_key:
         pytest.skip("OPENROUTER_API_KEY not configured")
@@ -58,30 +85,34 @@ def openrouter_models() -> list[dict]:
     return models
 
 
-def pytest_generate_tests(metafunc):
-    if "model" in metafunc.fixturenames:
-        metafunc.parametrize("model", get_target_model_ids(), scope="session")
-
-
 @pytest.fixture(scope="session")
 def ha_client(ha_url, ha_token) -> HomeAssistantClient:
-    agent_id = env_value("HA_CONVERSATION_AGENT_ID")
-    client = HomeAssistantClient(ha_url, ha_token, agent_id=agent_id)
-    client.get_conversation_agent_id()
-    return client
+    return HomeAssistantClient(ha_url, ha_token)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def configure_model(ha_client, model):
+@pytest.fixture(autouse=True)
+def configure_model(request):
+    if "model" not in request.fixturenames:
+        yield
+        return
+    global _configured_model
+    ha_client = request.getfixturevalue("ha_client")
+    model = request.getfixturevalue("model")
     if model == "unconfigured":
         pytest.skip("OpenRouter model not configured")
-    ha_client.reconfigure_openrouter_model(model)
-    time.sleep(1)
+    if _configured_model != model:
+        ha_client.reconfigure_openrouter_model(model)
+        time.sleep(1)
+        _configured_model = model
     yield model
 
 
 @pytest.fixture(autouse=True)
-def reset_entities(ha_client):
+def reset_entities(request):
+    if "model" not in request.fixturenames:
+        yield
+        return
+    ha_client = request.getfixturevalue("ha_client")
     for entity_id in ENTITY_CATALOG:
         setup_entity(ha_client, entity_id)
     yield
@@ -106,8 +137,8 @@ def reset_lamp_x(ha_client):
 
 
 @pytest.fixture
-def reset_fan_switch(ha_client):
-    setup_entity(ha_client, "switch.fan_switch")
+def reset_tv_switch(ha_client):
+    setup_entity(ha_client, "switch.tv_switch")
 
 
 @pytest.fixture
@@ -116,9 +147,11 @@ def reset_living_room(ha_client):
 
 
 @pytest.fixture(autouse=True)
-def rate_limit_pause():
+def rate_limit_pause(request):
     yield
-    time.sleep(6)
+    if "model" not in request.fixturenames:
+        return
+    time.sleep(usage_settle_seconds())
 
 
 @pytest.hookimpl(trylast=True)
