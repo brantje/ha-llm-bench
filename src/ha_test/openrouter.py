@@ -255,12 +255,19 @@ def filter_models(
     return filtered
 
 
+def parse_bool_env(key: str, *, default: bool = True) -> bool:
+    value = env_value(key)
+    if value is None:
+        return default
+    return value.lower() not in {"false", "0", "no", "off"}
+
+
 def get_free_models(api_key: str | None = None) -> list[dict[str, Any]]:
-    free_only = os.environ.get("OPENROUTER_FREE_ONLY", "true").lower() != "false"
-    min_context = int(os.environ.get("OPENROUTER_MIN_CONTEXT", "8192"))
-    allowlist = [part for part in os.environ.get("OPENROUTER_ALLOWLIST", "").split(",") if part]
-    denylist = [part for part in os.environ.get("OPENROUTER_DENYLIST", "").split(",") if part]
-    max_models = os.environ.get("OPENROUTER_MAX_MODELS")
+    free_only = parse_bool_env("OPENROUTER_FREE_ONLY", default=True)
+    min_context = int(env_value("OPENROUTER_MIN_CONTEXT") or "8192")
+    allowlist = parse_csv_ids(os.environ.get("OPENROUTER_ALLOWLIST", ""))
+    denylist = parse_csv_ids(os.environ.get("OPENROUTER_DENYLIST", ""))
+    max_models = env_value("OPENROUTER_MAX_MODELS")
     models = get_models(api_key=api_key)
     return filter_models(
         models,

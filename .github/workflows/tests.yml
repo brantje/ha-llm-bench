@@ -53,6 +53,22 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -r requirements.txt
 
+      - name: Print OpenRouter config
+        run: |
+          echo "OPENROUTER_MODEL=${OPENROUTER_MODEL:-<empty>}"
+          echo "OPENROUTER_FREE_ONLY=${OPENROUTER_FREE_ONLY:-<empty>}"
+          echo "OPENROUTER_MAX_MODELS=${OPENROUTER_MAX_MODELS:-<empty>}"
+          if [ -n "$OPENROUTER_ALLOWLIST" ]; then
+            echo "OPENROUTER_ALLOWLIST entries: $(echo "$OPENROUTER_ALLOWLIST" | tr ',' '\n' | wc -l)"
+          else
+            echo "OPENROUTER_ALLOWLIST=<empty>"
+          fi
+          PYTHONPATH=src .venv/bin/python -c "
+          from ha_test.openrouter import get_target_model_ids
+          ids = get_target_model_ids()
+          print(f'Resolved target models ({len(ids)}):', ', '.join(ids[:10]), '...' if len(ids) > 10 else '')
+          "
+
       - name: Start Home Assistant
         run: docker compose up -d --wait
 

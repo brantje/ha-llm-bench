@@ -7,12 +7,14 @@ import time
 from pathlib import Path
 
 import pytest
+from _pytest.runner import runtestprotocol
 from dotenv import load_dotenv
 
 from ha_test.helpers import ENTITY_CATALOG, setup_entity, snapshot_tracked_states
 from ha_test.homeassistant import HomeAssistantClient
 from ha_test.openrouter import env_value, get_target_model_ids, usage_settle_seconds
-from ha_test.reporting import RUN_METRICS, record_test_result
+from ha_test.read_timeout import READ_TIMEOUT_MAX_RETRIES, failed_with_read_timeout
+from ha_test.reporting import RUN_METRICS, record_test_result, remove_test_records
 
 _env_file = Path(__file__).resolve().parent.parent / ".env"
 if not os.environ.get("GITHUB_ACTIONS") and _env_file.exists():
@@ -156,6 +158,43 @@ def rate_limit_pause(request):
     time.sleep(usage_settle_seconds())
 
 
+def _model_from_item(item: pytest.Item) -> str:
+    if hasattr(item, "callspec") and item.callspec:
+        model = item.callspec.params.get("model")
+        if model is not None:
+            return str(model)
+    return env_value("OPENROUTER_MODEL") or "unknown"
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Re-run tests that fail with httpx ReadTimeout (transient HA/API slowness)."""
+    if READ_TIMEOUT_MAX_RETRIES <= 0:
+        return None
+
+    for attempt in range(READ_TIMEOUT_MAX_RETRIES + 1):
+        reports = runtestprotocol(
+            item,
+            nextitem=nextitem if attempt == READ_TIMEOUT_MAX_RETRIES else None,
+        )
+        call_report = next((report for report in reports if report.when == "call"), None)
+        if call_report is None or call_report.passed or call_report.skipped:
+            return True
+        if not failed_with_read_timeout(call_report):
+            return True
+        if attempt >= READ_TIMEOUT_MAX_RETRIES:
+            return True
+
+        remove_test_records(nodeid=item.nodeid, model=_model_from_item(item))
+        item.warn(
+            pytest.PytestWarning(
+                f"Retrying {item.nodeid} after ReadTimeout "
+                f"(attempt {attempt + 2}/{READ_TIMEOUT_MAX_RETRIES + 1})"
+            )
+        )
+    return True
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     from ha_test.reporting import finalize_report
@@ -171,9 +210,7 @@ def pytest_runtest_makereport(item, call):
     if report.when != "call" or not report.failed:
         return
 
-    model = item.callspec.params.get("model") if hasattr(item, "callspec") and item.callspec else None
-    if model is None:
-        model = env_value("OPENROUTER_MODEL") or "unknown"
+    model = _model_from_item(item)
 
     already_recorded = any(
         record.nodeid == item.nodeid and record.model == model and record.outcome == "failed"

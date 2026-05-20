@@ -106,6 +106,18 @@ def record_test_result(
     write_results_json()
 
 
+def remove_test_records(*, nodeid: str, model: str) -> None:
+    """Drop all recorded results for a test/model pair (e.g. before a retry)."""
+    before = len(RUN_METRICS.records)
+    RUN_METRICS.records = [
+        record
+        for record in RUN_METRICS.records
+        if not (record.nodeid == nodeid and record.model == model)
+    ]
+    if len(RUN_METRICS.records) != before:
+        write_results_json()
+
+
 def percentile(values: list[float], pct: float) -> float:
     if not values:
         return 0.0

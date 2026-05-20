@@ -116,6 +116,12 @@ CI does **not** use `.env`. All settings come from GitHub Actions environment va
 
 Bootstrap writes `HA_TOKEN` and `HA_CONVERSATION_AGENT_ID` to `$GITHUB_ENV` for the pytest step (not to `.env`).
 
+**Troubleshooting: only one model (e.g. `openrouter/owl-alpha`) runs**
+
+1. **`OPENROUTER_MODEL` overrides everything** — if this variable is set (even to a single model ID), allowlist and free-only filters are ignored. Leave it empty to use `OPENROUTER_ALLOWLIST` + discovery.
+2. **`OPENROUTER_FREE_ONLY` must be `false` without quotes** — the workflow defaults to `true` when the variable is unset. With `true`, only free models in your allowlist are tested (often just `openrouter/owl-alpha`). Values like `'false'` are treated as “not false” and keep free-only on.
+3. Check the **Print OpenRouter config** step in the Actions log — it shows the resolved model count before tests run.
+
 ### GitHub Pages (benchmark dashboard)
 
 After each push to `main` or `master`, the workflow publishes the latest reports to GitHub Pages (even when tests fail).
