@@ -13,13 +13,35 @@ import {
 import { renderAll, populateRunSelect } from "./render.js";
 import { destroyCharts } from "./charts.js";
 
-/** Reports base: local dev serves /docs/ from repo root; Pages serves docs as site root. */
+/** Site directory (trailing slash), e.g. /ha-llm-bench/ or /docs/ */
+function siteDirectory() {
+  const { pathname } = window.location;
+  const docsAt = pathname.indexOf("/docs");
+  if (docsAt >= 0) {
+    const prefix = pathname.slice(0, docsAt + 5);
+    return prefix.endsWith("/") ? prefix : `${prefix}/`;
+  }
+  if (pathname.endsWith("/")) return pathname;
+  if (pathname.endsWith(".html")) {
+    return `${pathname.slice(0, pathname.lastIndexOf("/") + 1)}`;
+  }
+  // Project Pages root without trailing slash, e.g. /ha-llm-bench
+  return `${pathname}/`;
+}
+
+/** Absolute path prefix for reports/, e.g. /ha-llm-bench/reports/ */
 function reportsBase() {
-  return window.location.pathname.includes("/docs") ? "../reports/" : "reports/";
+  const dir = siteDirectory();
+  if (dir.includes("/docs")) {
+    const root = dir.slice(0, dir.indexOf("/docs"));
+    return `${root}/reports/`;
+  }
+  return `${dir}reports/`;
 }
 
 function reportPath(relative) {
-  return `${reportsBase()}${relative}`;
+  const base = reportsBase();
+  return `${base}${relative.replace(/^\//, "")}`;
 }
 
 const paths = () => ({
@@ -37,10 +59,20 @@ const reportCache = new Map();
 /**
  * @param {string} url
  */
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, { method = "GET" } = {}) {
+  const res = await fetch(url, { method, cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`);
+  if (method === "HEAD") return null;
   return res.json();
+}
+
+async function reportExists(url) {
+  try {
+    await fetchJson(url, { method: "HEAD" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -67,13 +99,21 @@ async function buildRunSources() {
   try {
     const index = await fetchJson(PATHS.historyIndex);
     if (Array.isArray(index)) {
-      for (const entry of index) {
-        const path =
-          entry.path ||
-          `history/${sanitizeRunId(entry.run_id)}/report.json`;
-        const url = path.startsWith("../") || path.startsWith("reports/")
-          ? path
-          : reportPath(path);
+      const checks = await Promise.all(
+        index.map(async (entry) => {
+          const path =
+            entry.path ||
+            `history/${sanitizeRunId(entry.run_id)}/report.json`;
+          const url =
+            path.startsWith("/") || path.startsWith("http")
+              ? path
+              : reportPath(path);
+          const ok = await reportExists(url);
+          return { entry, url, ok };
+        }),
+      );
+      for (const { entry, url, ok } of checks) {
+        if (!ok) continue;
         const started = entry.started_at
           ? new Date(entry.started_at).toLocaleString()
           : entry.run_id;

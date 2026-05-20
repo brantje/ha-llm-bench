@@ -130,6 +130,8 @@ After each push to `main` or `master`, the workflow publishes the latest reports
 2. **URL**: `https://<owner>.github.io/<repo>/` (project site)
 3. **Contents**: `docs/` viewer plus `reports/` from the CI run (`report.json`, `results.json`, `history/`)
 
+History on Pages is accumulated across deploys (Actions cache + merge from the previous live site). If a run in the dropdown returns 404, hard-refresh the page (stale `index.json` cache) or wait for the next main-branch deploy.
+
 Pull requests run tests and upload a `benchmark-reports` artifact but do not deploy Pages.
 
 Replace `OWNER/REPO` in the badge URL above with your GitHub org/user and repository name.

@@ -69,6 +69,14 @@ jobs:
           print(f'Resolved target models ({len(ids)}):', ', '.join(ids[:10]), '...' if len(ids) > 10 else '')
           "
 
+      - name: Restore benchmark history
+        uses: actions/cache@v4
+        with:
+          path: reports/history
+          key: benchmark-history-${{ github.repository }}-${{ github.ref_name }}
+          restore-keys: |
+            benchmark-history-${{ github.repository }}-
+
       - name: Start Home Assistant
         run: docker compose up -d --wait
 
@@ -77,6 +85,10 @@ jobs:
 
       - name: Run conversational tests
         run: .venv/bin/pytest tests/ -v --tb=short
+
+      - name: Prune stale history index entries
+        if: always()
+        run: PYTHONPATH=src .venv/bin/python -c "from ha_test.reporting import load_history_index; load_history_index()"
 
       - name: Upload reports
         if: always()
@@ -102,6 +114,27 @@ jobs:
         with:
           name: benchmark-reports
           path: reports
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies for history merge
+        run: pip install -r requirements.txt
+
+      - name: Merge prior GitHub Pages history
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          PYTHONPATH=src python -c "
+          from ha_test.pages_history import merge_published_history
+          added = merge_published_history()
+          print(f'Merged {added} archived run(s) from live GitHub Pages')
+          "
+        continue-on-error: true
+
+      - name: Prune history index before deploy
+        run: PYTHONPATH=src python -c "from ha_test.reporting import load_history_index; print(f'{len(load_history_index())} history run(s) ready to deploy')"
 
       - name: Build static site
         run: |

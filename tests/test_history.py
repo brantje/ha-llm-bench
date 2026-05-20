@@ -81,6 +81,33 @@ def test_load_historical_tokens_uses_history(tmp_path, monkeypatch):
     assert tokens["source"] == "reports/history (1 runs)"
 
 
+def test_load_history_index_prunes_missing_reports(tmp_path, monkeypatch):
+    reports_dir = tmp_path / "reports"
+    history_dir = reports_dir / "history"
+    history_dir.mkdir(parents=True)
+    monkeypatch.setattr(reporting, "REPORTS_DIR", reports_dir)
+    monkeypatch.setattr(reporting, "HISTORY_DIR", history_dir)
+    monkeypatch.setattr(reporting, "HISTORY_INDEX", history_dir / "index.json")
+
+    (history_dir / "present").mkdir()
+    (history_dir / "present" / "report.json").write_text(
+        json.dumps({"run_id": "present", "models": {}})
+    )
+    (history_dir / "index.json").write_text(
+        json.dumps(
+            [
+                {"run_id": "present", "path": "history/present/report.json"},
+                {"run_id": "missing", "path": "history/missing/report.json"},
+            ]
+        )
+    )
+
+    index = reporting.load_history_index()
+    assert [entry["run_id"] for entry in index] == ["present"]
+    persisted = json.loads((history_dir / "index.json").read_text())
+    assert len(persisted) == 1
+
+
 def test_print_history_list_empty(tmp_path, monkeypatch, capsys):
     reports_dir = tmp_path / "reports"
     history_dir = reports_dir / "history"

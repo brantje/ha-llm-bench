@@ -430,7 +430,16 @@ def _sanitize_run_id(run_id: str) -> str:
     return run_id.replace(":", "-").replace(".", "-").replace("+", "_")
 
 
-def load_history_index() -> list[dict[str, Any]]:
+def prune_history_index(index: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop index entries whose report.json is missing on disk."""
+    pruned: list[dict[str, Any]] = []
+    for entry in index:
+        if load_report_json(history_report_path(entry)):
+            pruned.append(entry)
+    return pruned
+
+
+def load_history_index(*, prune: bool = True) -> list[dict[str, Any]]:
     """Return archived run manifest entries (newest first)."""
     if not HISTORY_INDEX.exists():
         return []
@@ -438,7 +447,15 @@ def load_history_index() -> list[dict[str, Any]]:
         index = json.loads(HISTORY_INDEX.read_text())
     except json.JSONDecodeError:
         return []
-    return index if isinstance(index, list) else []
+    if not isinstance(index, list):
+        return []
+    if prune:
+        pruned = prune_history_index(index)
+        if len(pruned) != len(index):
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            HISTORY_INDEX.write_text(json.dumps(pruned, indent=2))
+        return pruned
+    return index
 
 
 def history_report_path(entry: dict[str, Any]) -> Path:
