@@ -1,0 +1,5 @@
+ha_test_media:
+  media_player:
+    - name: Living Room
+      unique_id: living_room
+      area_id: living_room

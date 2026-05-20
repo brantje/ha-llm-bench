@@ -1,0 +1,9 @@
+{
+  "domain": "ha_test_media",
+  "name": "HA Test Media Player",
+  "codeowners": [],
+  "version": "1.0.0",
+  "requirements": [],
+  "iot_class": "local_polling",
+  "integration_type": "device"
+}
