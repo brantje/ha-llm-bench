@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-TRACKED_PREFIXES = ("light.", "switch.", "climate.", "input_", "scene.", "script.")
+TRACKED_PREFIXES = (
+    "light.",
+    "switch.",
+    "climate.",
+    "media_player.",
+    "input_",
+    "scene.",
+    "script.",
+)
 
 ENTITY_CATALOG = {
     "light.lamp_x": {
@@ -40,6 +48,34 @@ ENTITY_CATALOG = {
                 "climate",
                 "set_temperature",
                 {"entity_id": "climate.living_room", "temperature": 21},
+            ),
+        ),
+    },
+    "media_player.living_room": {
+        "friendly_name": "Living Room Speaker",
+        "domain": "media_player",
+        "related_entities": (),
+        "setup": lambda client: (
+            client.call_service(
+                "media_player",
+                "media_stop",
+                {"entity_id": "media_player.living_room"},
+            ),
+            client.call_service(
+                "media_player",
+                "volume_mute",
+                {
+                    "entity_id": "media_player.living_room",
+                    "is_volume_muted": False,
+                },
+            ),
+            client.call_service(
+                "media_player",
+                "volume_set",
+                {
+                    "entity_id": "media_player.living_room",
+                    "volume_level": 0.5,
+                },
             ),
         ),
     },
