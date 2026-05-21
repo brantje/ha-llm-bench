@@ -10,7 +10,7 @@ import pytest
 from _pytest.runner import runtestprotocol
 from dotenv import load_dotenv
 
-from ha_test.helpers import ENTITY_CATALOG, setup_entity, snapshot_tracked_states
+from ha_test.helpers import ENTITY_CATALOG, TIMER_ENTITY_IDS, setup_entity, snapshot_tracked_states
 from ha_test.homeassistant import HomeAssistantClient
 from ha_test.openrouter import env_value, get_target_model_ids, usage_settle_seconds
 from ha_test.read_timeout import (
@@ -95,7 +95,11 @@ def openrouter_models() -> list[dict]:
 
 @pytest.fixture(scope="session")
 def ha_client(ha_url, ha_token) -> HomeAssistantClient:
-    return HomeAssistantClient(ha_url, ha_token)
+    client = HomeAssistantClient(ha_url, ha_token)
+    from bootstrap import expose_conversation_entities
+
+    expose_conversation_entities(ha_url, ha_token, list(TIMER_ENTITY_IDS))
+    return client
 
 
 @pytest.fixture(autouse=True)

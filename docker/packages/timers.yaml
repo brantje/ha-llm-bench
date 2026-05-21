@@ -1,0 +1,13 @@
+timer:
+  kitchen:
+    name: Kitchen Timer
+    duration: "00:00:00"
+  upstairs:
+    name: Upstairs Timer
+    duration: "00:00:00"
+  pizza:
+    name: Pizza Timer
+    duration: "00:00:00"
+  laundry:
+    name: Laundry Timer
+    duration: "00:00:00"

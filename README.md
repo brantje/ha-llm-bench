@@ -57,6 +57,7 @@ PYTHONPATH=src .venv/bin/python bootstrap.py --history
 | `light.lamp_x` | turn lamp x off |
 | `switch.tv_switch` | turn the tv switch on |
 | `climate.living_room` | set living room temperature to 22 degrees |
+| `timer.pizza` | start the pizza timer for 5 minutes |
 
 ## Model Filters
 

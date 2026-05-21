@@ -39,7 +39,7 @@ def format_state_summary(state: dict[str, Any] | None) -> str | None:
         return None
     summary = {"entity_id": state.get("entity_id"), "state": state.get("state")}
     attributes = state.get("attributes") or {}
-    for key in ("temperature", "brightness", "hvac_mode", "friendly_name"):
+    for key in ("temperature", "brightness", "hvac_mode", "friendly_name", "remaining"):
         if key in attributes:
             summary[key] = attributes[key]
     return json.dumps(summary, sort_keys=True)
@@ -152,8 +152,11 @@ def run_entity_test(
     predicate: Callable[[dict[str, Any]], bool],
     setup: Callable | None = None,
     verify: Callable[[dict[str, Any]], None] | None = None,
+    extra_verify: Callable | None = None,
+    expected_entity_ids: set[str] | None = None,
     timeout: float = 25.0,
 ) -> None:
+    allowed_entities = expected_entity_ids or {entity_id}
     if setup:
         setup(ha_client)
 
@@ -162,12 +165,14 @@ def run_entity_test(
         state = wait_and_assert(ha_client, entity_id, predicate, timeout=timeout)
         if verify:
             verify(state)
+        if extra_verify:
+            extra_verify(ha_client)
         after = snapshot_tracked_states(ha_client.get_all_states())
         flags = classify_outcome(
             result,
             entity_snapshot,
             after,
-            expected_entity_ids={entity_id},
+            expected_entity_ids=allowed_entities,
         )
         record_test_result(
             nodeid=nodeid,
@@ -189,7 +194,7 @@ def run_entity_test(
             result,
             entity_snapshot,
             after,
-            expected_entity_ids={entity_id},
+            expected_entity_ids=allowed_entities,
         )
         if is_test_timeout(exc):
             record_skip(
