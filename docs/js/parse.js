@@ -81,12 +81,15 @@ export function parseReport(report) {
     const s = models[id];
     const total = s.tests_total || 0;
     const passed = s.tests_passed || 0;
+    const failed = s.tests_failed || 0;
+    const scored = passed + failed;
     return {
       id,
       testsTotal: total,
       testsPassed: passed,
-      testsFailed: s.tests_failed || 0,
-      passRate: total ? passed / total : 0,
+      testsFailed: failed,
+      testsSkipped: s.tests_skipped || 0,
+      passRate: scored ? passed / scored : 0,
       latencyAvg: s.latency_ms?.avg ?? 0,
       latencyP50: s.latency_ms?.p50 ?? 0,
       latencyP95: s.latency_ms?.p95 ?? 0,

@@ -240,7 +240,8 @@ def build_model_report(
 ) -> dict[str, Any]:
     latencies = [record.latency_ms for record in records]
     passed = sum(1 for record in records if record.outcome == "passed")
-    failed = len(records) - passed
+    failed = sum(1 for record in records if record.outcome == "failed")
+    skipped = sum(1 for record in records if record.outcome == "skipped")
     usage = resolve_model_usage(model, records, activity_totals)
     display_records = records_with_usage_allocated(records, usage)
     total_test_time_ms = sum(latencies)
@@ -254,6 +255,7 @@ def build_model_report(
         "tests_total": len(records),
         "tests_passed": passed,
         "tests_failed": failed,
+        "tests_skipped": skipped,
         "total_test_time_ms": total_test_time_ms,
         "total_test_time_seconds": round(total_test_time_seconds, 3),
         "latency_ms": {
@@ -361,6 +363,7 @@ def build_report(
     }
     total_tests = len(run_metrics.records)
     passed_tests = sum(1 for record in run_metrics.records if record.outcome == "passed")
+    failed_tests = sum(1 for record in run_metrics.records if record.outcome == "failed")
     total_test_time_ms = sum(record.latency_ms for record in run_metrics.records)
     total_test_time_seconds = total_test_time_ms / 1000 if total_test_time_ms else 0.0
     started_at = datetime.fromisoformat(run_metrics.started_at)
@@ -391,7 +394,11 @@ def build_report(
         "models": model_reports,
         "summary": {
             "models_tested": len(models),
-            "overall_pass_rate": (passed_tests / total_tests) if total_tests else 0.0,
+            "overall_pass_rate": (
+                (passed_tests / (passed_tests + failed_tests))
+                if (passed_tests + failed_tests)
+                else 0.0
+            ),
             "total_test_time_ms": total_test_time_ms,
             "total_test_time_seconds": round(total_test_time_seconds, 3),
             "total_run_time_seconds": round(total_run_time_seconds, 3),

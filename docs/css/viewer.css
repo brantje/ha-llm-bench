@@ -258,6 +258,7 @@ table.data-table tr.leaderboard-row {
 
 .badge-pass { background: rgba(76, 175, 80, 0.25); color: var(--pass); }
 .badge-fail { background: rgba(244, 67, 54, 0.25); color: var(--fail); }
+.badge-skip { background: rgba(255, 193, 7, 0.25); color: #ffc107; }
 
 .flag-icon {
   display: inline-block;

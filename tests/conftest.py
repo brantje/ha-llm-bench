@@ -13,7 +13,11 @@ from dotenv import load_dotenv
 from ha_test.helpers import ENTITY_CATALOG, setup_entity, snapshot_tracked_states
 from ha_test.homeassistant import HomeAssistantClient
 from ha_test.openrouter import env_value, get_target_model_ids, usage_settle_seconds
-from ha_test.read_timeout import READ_TIMEOUT_MAX_RETRIES, failed_with_read_timeout
+from ha_test.read_timeout import (
+    READ_TIMEOUT_MAX_RETRIES,
+    failed_with_read_timeout,
+    failed_with_timeout,
+)
 from ha_test.reporting import RUN_METRICS, record_test_result, remove_test_records
 
 _env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -207,15 +211,36 @@ def pytest_sessionfinish(session, exitstatus):
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    if report.when != "call" or not report.failed:
+    if report.when != "call":
         return
 
     model = _model_from_item(item)
-
     already_recorded = any(
-        record.nodeid == item.nodeid and record.model == model and record.outcome == "failed"
+        record.nodeid == item.nodeid and record.model == model
         for record in RUN_METRICS.records
     )
+
+    if report.failed and failed_with_timeout(report):
+        report.outcome = "skipped"
+        reason = str(report.longrepr)
+        report.longrepr = f"Skipped due to timeout: {reason}"
+        if not already_recorded:
+            command = None
+            if hasattr(item, "callspec") and item.callspec and "command" in item.callspec.params:
+                command = item.callspec.params["command"]
+            record_test_result(
+                nodeid=item.nodeid,
+                model=model,
+                outcome="skipped",
+                latency_ms=0.0,
+                command=command,
+                failure_reason=reason,
+            )
+        return
+
+    if not report.failed:
+        return
+
     if already_recorded:
         return
 

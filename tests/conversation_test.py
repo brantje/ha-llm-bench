@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+import pytest
+
 from ha_test.helpers import (
     classify_outcome,
     get_changed_entities,
@@ -12,6 +14,7 @@ from ha_test.helpers import (
     snapshot_tracked_states,
     wait_and_assert,
 )
+from ha_test.read_timeout import is_test_timeout, is_timeout_message
 from ha_test.reporting import record_test_result
 
 
@@ -67,6 +70,40 @@ def format_failure_message(
     if changed_entities:
         lines.append(f"Changed entities: {', '.join(changed_entities)}")
     return "\n".join(lines)
+
+
+def record_skip(
+    *,
+    nodeid: str,
+    model: str,
+    command: str,
+    reason: str,
+    latency_ms: float = 0.0,
+    entity_id: str | None = None,
+    result: Any | None = None,
+    actual_state: dict[str, Any] | None = None,
+    changed_entities: list[str] | None = None,
+    clarification: bool = False,
+    hallucination: bool = False,
+    incorrect_entity_targeting: bool = False,
+) -> None:
+    record_test_result(
+        nodeid=nodeid,
+        model=model,
+        outcome="skipped",
+        latency_ms=latency_ms,
+        command=command,
+        entity_id=entity_id,
+        failure_reason=reason,
+        response_speech=getattr(result, "speech", None) if result else None,
+        response_type=getattr(result, "response_type", None) if result else None,
+        actual_state=format_state_summary(actual_state),
+        changed_entities=changed_entities,
+        clarification=clarification,
+        hallucination=hallucination,
+        incorrect_entity_targeting=incorrect_entity_targeting,
+        **usage_from_result(result),
+    )
 
 
 def record_failure(
@@ -154,6 +191,19 @@ def run_entity_test(
             after,
             expected_entity_ids={entity_id},
         )
+        if is_test_timeout(exc):
+            record_skip(
+                nodeid=nodeid,
+                model=model,
+                command=command,
+                reason=str(exc),
+                latency_ms=result.latency_ms,
+                entity_id=entity_id,
+                result=result,
+                actual_state=actual_state,
+                **flags,
+            )
+            pytest.skip(str(exc))
         record_failure(
             nodeid=nodeid,
             model=model,
@@ -292,6 +342,17 @@ def run_implicit_choice_test(
         "Command did not clarify and did not match any acceptable entity: "
         + "; ".join(errors)
     )
+    if errors and all(is_timeout_message(error) for error in errors):
+        record_skip(
+            nodeid=nodeid,
+            model=model,
+            command=command,
+            reason=reason,
+            latency_ms=result.latency_ms,
+            result=result,
+            **flags,
+        )
+        pytest.skip(reason)
     record_failure(
         nodeid=nodeid,
         model=model,

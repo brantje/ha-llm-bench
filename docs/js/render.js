@@ -323,7 +323,9 @@ function renderTestsTable() {
     const badge =
       t.outcome === "passed"
         ? '<span class="badge badge-pass">pass</span>'
-        : '<span class="badge badge-fail">fail</span>';
+        : t.outcome === "skipped"
+          ? '<span class="badge badge-skip">skip</span>'
+          : '<span class="badge badge-fail">fail</span>';
     const changed =
       t.changed_entities && t.changed_entities.length
         ? esc(JSON.stringify(t.changed_entities))

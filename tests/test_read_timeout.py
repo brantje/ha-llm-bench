@@ -5,7 +5,14 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from ha_test.read_timeout import failed_with_read_timeout, is_read_timeout
+from ha_test.read_timeout import (
+    failed_with_read_timeout,
+    failed_with_timeout,
+    is_read_timeout,
+    is_state_wait_timeout,
+    is_test_timeout,
+    is_timeout_message,
+)
 from ha_test.reporting import RUN_METRICS, record_test_result, remove_test_records
 
 
@@ -25,6 +32,50 @@ def test_is_read_timeout_detects_wrapped_exception():
 def test_is_read_timeout_false_for_other_errors():
     assert not is_read_timeout(TimeoutError("state wait"))
     assert not is_read_timeout(None)
+
+
+def test_is_state_wait_timeout_detects_entity_wait():
+    exc = TimeoutError("Timed out waiting for climate.living_room. Last state: {}")
+    assert is_state_wait_timeout(exc)
+
+
+def test_is_state_wait_timeout_detects_wrapped_exception():
+    try:
+        raise TimeoutError("Timed out waiting for light.lamp_x. Last state: {}")
+    except TimeoutError as exc:
+        wrapper = AssertionError("entity check failed")
+        wrapper.__cause__ = exc
+    assert is_state_wait_timeout(wrapper)
+
+
+def test_is_state_wait_timeout_false_for_other_timeouts():
+    assert not is_state_wait_timeout(TimeoutError("Config entry did not load"))
+    assert not is_state_wait_timeout(None)
+
+
+def test_is_test_timeout_covers_read_and_state_wait():
+    assert is_test_timeout(httpx.ReadTimeout("timed out"))
+    assert is_test_timeout(
+        TimeoutError("Timed out waiting for climate.living_room. Last state: {}")
+    )
+
+
+def test_is_timeout_message():
+    assert is_timeout_message("climate.living_room: Timed out waiting for climate.living_room")
+    assert is_timeout_message("httpx.ReadTimeout: timed out")
+    assert not is_timeout_message("Expected light on, got off")
+
+
+def test_failed_with_timeout_from_excinfo():
+    class FakeExcInfo:
+        value = TimeoutError("Timed out waiting for climate.living_room. Last state: {}")
+
+    class FakeReport:
+        failed = True
+        excinfo = FakeExcInfo()
+        longrepr = ""
+
+    assert failed_with_timeout(FakeReport())
 
 
 def test_failed_with_read_timeout_from_excinfo():
