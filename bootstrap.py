@@ -320,6 +320,26 @@ def configure_openrouter(base_url: str, token: str, api_key: str, model: str) ->
     return entry
 
 
+def expose_conversation_entities(base_url: str, token: str, entity_ids: list[str]) -> None:
+    if not entity_ids:
+        return
+    result = asyncio.run(
+        _ws_request(
+            base_url,
+            token,
+            {
+                "id": 1,
+                "type": "homeassistant/expose_entity",
+                "assistants": ["conversation"],
+                "entity_ids": entity_ids,
+                "should_expose": True,
+            },
+        )
+    )
+    if not result.get("success", True):
+        raise RuntimeError(f"Failed to expose entities to conversation: {result}")
+
+
 def snapshot_baseline_states(base_url: str, token: str) -> None:
     response = api_request(base_url, token, "GET", "/api/states")
     response.raise_for_status()
@@ -328,7 +348,16 @@ def snapshot_baseline_states(base_url: str, token: str) -> None:
         state["entity_id"]: state
         for state in response.json()
         if state["entity_id"].startswith(
-            ("light.", "switch.", "climate.", "input_", "scene.", "script.")
+            (
+                "light.",
+                "switch.",
+                "climate.",
+                "media_player.",
+                "timer.",
+                "input_",
+                "scene.",
+                "script.",
+            )
         )
     }
     BASELINE_PATH.write_text(json.dumps(tracked, indent=2))
@@ -431,6 +460,9 @@ def bootstrap(base_url: str, reset: bool = False) -> None:
     else:
         print("OPENROUTER_API_KEY not set; skipping OpenRouter configuration")
 
+    from ha_test.helpers import TIMER_ENTITY_IDS
+
+    expose_conversation_entities(base_url, token, list(TIMER_ENTITY_IDS))
     snapshot_baseline_states(base_url, token)
     print(f"Bootstrap complete. Token saved to {TOKEN_PATH}")
 

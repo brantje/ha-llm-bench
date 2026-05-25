@@ -26,6 +26,14 @@ def test_allowed_entities_for_helper_includes_parent_catalog_entity():
     assert "input_select.living_room_hvac" in allowed
 
 
+def test_allowed_entities_for_timer_includes_only_timer_entity():
+    allowed = allowed_entities_for("timer.pizza")
+
+    assert "timer.pizza" in allowed
+    assert "timer.laundry" not in allowed
+    assert "light.lamp_x" not in allowed
+
+
 def test_allowed_entities_for_implicit_choice_unions_scopes():
     allowed = allowed_entities_for("light.lamp_x", "switch.tv_switch")
 

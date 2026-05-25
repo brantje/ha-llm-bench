@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 TRACKED_PREFIXES = (
@@ -9,9 +10,17 @@ TRACKED_PREFIXES = (
     "switch.",
     "climate.",
     "media_player.",
+    "timer.",
     "input_",
     "scene.",
     "script.",
+)
+
+TIMER_ENTITY_IDS = (
+    "timer.kitchen",
+    "timer.upstairs",
+    "timer.pizza",
+    "timer.laundry",
 )
 
 ENTITY_CATALOG = {
@@ -77,6 +86,38 @@ ENTITY_CATALOG = {
                     "volume_level": 0.5,
                 },
             ),
+        ),
+    },
+    "timer.kitchen": {
+        "friendly_name": "Kitchen Timer",
+        "domain": "timer",
+        "related_entities": (),
+        "setup": lambda client: client.call_service(
+            "timer", "cancel", {"entity_id": "timer.kitchen"}
+        ),
+    },
+    "timer.upstairs": {
+        "friendly_name": "Upstairs Timer",
+        "domain": "timer",
+        "related_entities": (),
+        "setup": lambda client: client.call_service(
+            "timer", "cancel", {"entity_id": "timer.upstairs"}
+        ),
+    },
+    "timer.pizza": {
+        "friendly_name": "Pizza Timer",
+        "domain": "timer",
+        "related_entities": (),
+        "setup": lambda client: client.call_service(
+            "timer", "cancel", {"entity_id": "timer.pizza"}
+        ),
+    },
+    "timer.laundry": {
+        "friendly_name": "Laundry Timer",
+        "domain": "timer",
+        "related_entities": (),
+        "setup": lambda client: client.call_service(
+            "timer", "cancel", {"entity_id": "timer.laundry"}
         ),
     },
 }
@@ -165,6 +206,59 @@ def assert_switch_off(state: dict[str, Any]) -> None:
 def assert_climate_temp(state: dict[str, Any], expected: float, tolerance: float = 0.6) -> None:
     actual = float(state["attributes"].get("temperature", state["state"]))
     assert abs(actual - expected) <= tolerance, f"Expected {expected}, got {actual}"
+
+
+def timer_remaining_seconds(state: dict[str, Any]) -> int:
+    remaining = (state.get("attributes") or {}).get("remaining", 0)
+    if isinstance(remaining, (int, float)):
+        return int(remaining)
+    if isinstance(remaining, str) and ":" in remaining:
+        hours, minutes, seconds = (int(part) for part in remaining.split(":"))
+        return hours * 3600 + minutes * 60 + seconds
+    return 0
+
+
+def assert_timer_active(state: dict[str, Any], *, min_remaining: int = 1) -> None:
+    assert state["state"] == "active", f"Expected timer active, got {state['state']}"
+    remaining = timer_remaining_seconds(state)
+    assert remaining >= min_remaining, f"Expected remaining >= {min_remaining}, got {remaining}"
+
+
+def cancel_all_timers(client, entity_ids: tuple[str, ...] = TIMER_ENTITY_IDS) -> None:
+    for entity_id in entity_ids:
+        client.call_service("timer", "cancel", {"entity_id": entity_id})
+
+
+def active_timers(client, entity_ids: tuple[str, ...] = TIMER_ENTITY_IDS) -> list[str]:
+    return [
+        entity_id
+        for entity_id in entity_ids
+        if client.get_state(entity_id)["state"] == "active"
+    ]
+
+
+def wait_for_active_timer_count(
+    client,
+    *,
+    exact: int | None = None,
+    minimum: int | None = None,
+    entity_ids: tuple[str, ...] = TIMER_ENTITY_IDS,
+    timeout: float = 25.0,
+    interval: float = 0.5,
+) -> list[str]:
+    deadline = time.monotonic() + timeout
+    last_active: list[str] = []
+    while time.monotonic() < deadline:
+        last_active = active_timers(client, entity_ids)
+        if exact is not None and len(last_active) == exact:
+            return last_active
+        if minimum is not None and len(last_active) >= minimum:
+            return last_active
+        time.sleep(interval)
+    raise TimeoutError(
+        f"Timed out waiting for timer count "
+        f"(exact={exact}, minimum={minimum}). Last active: {last_active}"
+    )
 
 
 def is_clarification(result) -> bool:
